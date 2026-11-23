@@ -57,7 +57,10 @@ func (h *NotificationHandler) publish(ctx context.Context, ns ...notification.No
 	}
 	evs := make([]events.Event, len(ns))
 	for i, n := range ns {
-		evs[i] = events.FromNotification(n, h.now())
+		// updated_at is the database's time of this change. Clients use it to
+		// ignore an event that arrives after a newer one, e.g. the API's
+		// "created" landing after the worker's "processing".
+		evs[i] = events.FromNotification(n, n.UpdatedAt)
 	}
 	h.Events.Publish(ctx, evs...)
 }
