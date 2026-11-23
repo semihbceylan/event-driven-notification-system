@@ -34,6 +34,7 @@ type Repository interface {
 	Get(ctx context.Context, id uuid.UUID) (notification.Notification, error)
 	ListByBatch(ctx context.Context, batchID uuid.UUID) ([]notification.Notification, error)
 	Cancel(ctx context.Context, id uuid.UUID) (notification.Notification, error)
+	Retry(ctx context.Context, id uuid.UUID, extraAttempts int) (notification.Notification, error)
 	List(ctx context.Context, f notification.ListFilter) ([]notification.Notification, *notification.Cursor, error)
 }
 
@@ -200,6 +201,21 @@ func (h *NotificationHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, n)
 }
 
+// Retry handles POST /v1/notifications/{id}/retry. Only failed
+// notifications can be retried; they get MaxAttempts more tries.
+func (h *NotificationHandler) Retry(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	n, err := h.Repo.Retry(r.Context(), id, h.MaxAttempts)
+	if err != nil {
+		h.handleStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
+}
+
 type listResponse struct {
 	Data       []notification.Notification `json:"data"`
 	NextCursor *string                     `json:"next_cursor"`
@@ -281,13 +297,17 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 // handleStoreError maps storage errors to HTTP responses. Unexpected errors
 // are logged with the correlation ID and hidden from the client.
 func (h *NotificationHandler) handleStoreError(w http.ResponseWriter, r *http.Request, err error) {
-	var notCancellable *notification.NotCancellableError
+	var invalidState *notification.InvalidStateError
 	var conflict *notification.IdempotencyConflictError
 	switch {
 	case errors.Is(err, notification.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "notification not found", nil)
-	case errors.As(err, &notCancellable):
-		writeError(w, http.StatusConflict, "not_cancellable", notCancellable.Error(), nil)
+	case errors.As(err, &invalidState):
+		code := "not_cancellable"
+		if invalidState.Action == "retry" {
+			code = "not_retryable"
+		}
+		writeError(w, http.StatusConflict, code, invalidState.Error(), nil)
 	case errors.As(err, &conflict):
 		writeError(w, http.StatusConflict, "idempotency_key_reused", conflict.Error(), nil)
 	default:

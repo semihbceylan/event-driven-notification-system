@@ -17,6 +17,7 @@ func NewRouter(logger *slog.Logger, health HealthHandler, notifications *Notific
 	mux.HandleFunc("GET /v1/notifications", notifications.List)
 	mux.HandleFunc("GET /v1/notifications/{id}", notifications.Get)
 	mux.HandleFunc("POST /v1/notifications/{id}/cancel", notifications.Cancel)
+	mux.HandleFunc("POST /v1/notifications/{id}/retry", notifications.Retry)
 	mux.HandleFunc("GET /v1/batches/{id}", notifications.GetBatch)
 
 	// Order matters: RequestContext runs first so that Recover can log
