@@ -1,7 +1,5 @@
 // Command worker claims pending notifications from the queue and delivers
 // them through the external provider.
-//
-// Step 1 only wires up dependencies; the processing loop comes in step 4.
 package main
 
 import (
@@ -10,10 +8,17 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/config"
 	"github.com/semihbceylan/event-driven-notification-system/internal/database"
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
+	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
+	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
+	"github.com/semihbceylan/event-driven-notification-system/internal/ratelimit"
+	"github.com/semihbceylan/event-driven-notification-system/internal/worker"
 )
 
 func main() {
@@ -40,8 +45,34 @@ func run(logger *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	logger.Info("worker started", "workers_per_channel", cfg.WorkersPerChannel, "rate_limit_per_second", cfg.RateLimitPerSecond)
-	<-ctx.Done()
-	logger.Info("shutting down")
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+	defer func() { _ = rdb.Close() }()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		return err
+	}
+
+	w := worker.New(
+		worker.Config{
+			Channels:          notification.Channels,
+			WorkersPerChannel: cfg.WorkersPerChannel,
+			PollInterval:      cfg.PollInterval,
+			LockTimeout:       cfg.LockTimeout,
+			RetryBaseDelay:    cfg.RetryBaseDelay,
+			RetryMaxDelay:     cfg.RetryMaxDelay,
+			ReapInterval:      cfg.ReapInterval,
+		},
+		notification.NewStore(pool),
+		provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout),
+		ratelimit.New(rdb, cfg.RateLimitPerSecond, time.Second),
+		logger,
+	)
+
+	logger.Info("worker started",
+		"workers_per_channel", cfg.WorkersPerChannel,
+		"rate_limit_per_second", cfg.RateLimitPerSecond,
+		"provider_url", cfg.ProviderURL,
+	)
+	w.Run(ctx) // returns after SIGTERM once in-flight sends finish
+	logger.Info("worker stopped")
 	return nil
 }
