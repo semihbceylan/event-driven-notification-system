@@ -296,7 +296,7 @@ func TestDeliveryContinuesTheCreatingTrace(t *testing.T) {
 	}
 	attrs := map[string]string{}
 	for _, a := range deliver.Attributes() {
-		attrs[string(a.Key)] = a.Value.Emit()
+		attrs[string(a.Key)] = a.Value.String()
 	}
 	if attrs["notification.outcome"] != "retry" || attrs["notification.id"] != n.ID.String() {
 		t.Errorf("attributes = %v", attrs)
