@@ -85,6 +85,16 @@ services:
       mockprovider:
         condition: service_healthy
 
+  dashboard:
+    build: ./web
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+
   prometheus:
     image: prom/prometheus:v2.55.1
     volumes:
