@@ -44,7 +44,8 @@ func (h WSHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return // Accept has already written the error response
 	}
-	defer conn.CloseNow()
+	// Closing an already-closed connection returns an error we cannot act on.
+	defer func() { _ = conn.CloseNow() }()
 
 	log := logging.FromContext(r.Context())
 	client := h.Hub.Register(batchID)

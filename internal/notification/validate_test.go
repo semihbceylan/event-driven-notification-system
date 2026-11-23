@@ -133,7 +133,7 @@ func TestPriorityRankRoundTrip(t *testing.T) {
 			t.Errorf("%s: round trip gave %s", p, got)
 		}
 	}
-	if !(PriorityHigh.Rank() < PriorityNormal.Rank() && PriorityNormal.Rank() < PriorityLow.Rank()) {
+	if PriorityHigh.Rank() >= PriorityNormal.Rank() || PriorityNormal.Rank() >= PriorityLow.Rank() {
 		t.Error("high must sort before normal, and normal before low")
 	}
 }
