@@ -1,5 +1,7 @@
 # Event-Driven Notification System
 
+[![CI](https://github.com/semihbceylan/event-driven-notification-system/actions/workflows/ci.yml/badge.svg)](https://github.com/semihbceylan/event-driven-notification-system/actions/workflows/ci.yml)
+
 A Go service that accepts SMS, email and push notifications over an HTTP API, queues them, and
 delivers them through an external provider. It covers:
 
@@ -339,7 +341,14 @@ All settings are environment variables; docker compose passes the main ones thro
 ```bash
 make test   # go test -race ./... (integration tests start Postgres and Redis with testcontainers; needs Docker)
 cd web && npm test   # dashboard unit tests (vitest)
+make smoke           # end-to-end checks against the running stack (scripts/smoke.sh)
 ```
+
+**CI** (GitHub Actions, `.github/workflows/ci.yml`) runs on every push and pull request:
+gofmt, `go vet` and golangci-lint; Go tests with the race detector, including the testcontainers
+integration tests; dashboard tests and type-checked build; then the whole stack with
+`docker compose up` and `scripts/smoke.sh`, which checks delivery, idempotency, validation, and that a
+simulated provider outage pauses delivery without failing any message.
 
 | Layer | What is covered |
 |---|---|
