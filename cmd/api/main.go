@@ -11,12 +11,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/config"
 	"github.com/semihbceylan/event-driven-notification-system/internal/database"
 	"github.com/semihbceylan/event-driven-notification-system/internal/httpapi"
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
+	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 )
 
@@ -55,14 +59,39 @@ func run(logger *slog.Logger) error {
 		"postgres": pool,
 		"redis":    httpapi.PingFunc(func(ctx context.Context) error { return rdb.Ping(ctx).Err() }),
 	}}
+	store := notification.NewStore(pool)
 	notifications := &httpapi.NotificationHandler{
-		Repo:        notification.NewStore(pool),
+		Repo:        store,
 		MaxAttempts: cfg.MaxAttempts,
 	}
 
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		metrics.NewQueueCollector(func(ctx context.Context) ([]metrics.QueueDepth, error) {
+			depths, err := store.QueueDepths(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]metrics.QueueDepth, 0, len(depths))
+			for ch, q := range depths {
+				out = append(out, metrics.QueueDepth{Channel: string(ch), Due: q.Due, Waiting: q.Waiting, Processing: q.Processing})
+			}
+			return out, nil
+		}, logger),
+	)
+
 	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(logger, health, notifications),
+		Addr: cfg.HTTPAddr,
+		Handler: httpapi.NewRouter(httpapi.Deps{
+			Logger:        logger,
+			Health:        health,
+			Notifications: notifications,
+			Metrics:       &httpapi.MetricsHandler{Stats: store},
+			Prometheus:    promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
+			HTTPMetrics:   metrics.NewHTTP(reg),
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -128,7 +128,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeRepo) {
 	repo := newFakeRepo()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := &NotificationHandler{Repo: repo, MaxAttempts: 5}
-	srv := httptest.NewServer(NewRouter(logger, HealthHandler{}, h))
+	srv := httptest.NewServer(NewRouter(Deps{Logger: logger, Notifications: h}))
 	t.Cleanup(srv.Close)
 	return srv, repo
 }
