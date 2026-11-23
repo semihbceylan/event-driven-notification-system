@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/semihbceylan/event-driven-notification-system/internal/breaker"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
 )
@@ -86,7 +87,7 @@ func (l fakeLimiter) Wait(context.Context, string) error { return l.err }
 var fixedNow = time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
 
 func newTestWorker(q Queue, s Sender, l Limiter) *Worker {
-	w := New(Config{RetryBaseDelay: 2 * time.Second, RetryMaxDelay: time.Minute}, q, s, l,
+	w := New(Config{RetryBaseDelay: 2 * time.Second, RetryMaxDelay: time.Minute}, q, s, l, nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	w.now = func() time.Time { return fixedNow }
 	w.rand = func() float64 { return 0 } // lower edge of the jitter range
@@ -194,5 +195,58 @@ func TestProcessOneLostLockIsNotAnError(t *testing.T) {
 	q := &fakeQueue{next: pending(1), recordFn: func() error { return notification.ErrLockLost }}
 	if _, err := newTestWorker(q, &fakeSender{}, fakeLimiter{}).ProcessOne(context.Background(), notification.ChannelSMS); err != nil {
 		t.Errorf("lost lock should be logged, not returned: %v", err)
+	}
+}
+
+// countingQueue always has another notification ready and counts claims.
+type countingQueue struct {
+	fakeQueue
+	claims int
+}
+
+func (q *countingQueue) Claim(context.Context, notification.Channel, time.Duration) (notification.Notification, bool, error) {
+	q.claims++
+	return *pending(1), true, nil
+}
+
+func TestBreakerStopsClaimsDuringOutage(t *testing.T) {
+	q := &countingQueue{}
+	s := &fakeSender{err: &provider.Error{StatusCode: 503, Retryable: true}}
+	w := New(Config{
+		Channels:       []notification.Channel{notification.ChannelSMS},
+		RetryBaseDelay: time.Second, RetryMaxDelay: time.Minute,
+		Breaker: breaker.Config{Threshold: 3, Cooldown: time.Hour, MaxCooldown: time.Hour},
+	}, q, s, fakeLimiter{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	for range 10 {
+		if _, err := w.ProcessOne(context.Background(), notification.ChannelSMS); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 3 failures open the breaker; the other 7 calls must not claim anything,
+	// so those notifications keep all their attempts.
+	if q.claims != 3 || s.calls != 3 {
+		t.Errorf("claims=%d sends=%d, want 3 and 3", q.claims, s.calls)
+	}
+	if got := w.BreakerStates()["sms"]; got != "open" {
+		t.Errorf("breaker state = %s, want open", got)
+	}
+}
+
+func TestPermanentErrorsDoNotOpenBreaker(t *testing.T) {
+	q := &countingQueue{}
+	s := &fakeSender{err: &provider.Error{StatusCode: 400, Retryable: false}}
+	w := New(Config{
+		Channels: []notification.Channel{notification.ChannelSMS},
+		Breaker:  breaker.Config{Threshold: 3, Cooldown: time.Hour, MaxCooldown: time.Hour},
+	}, q, s, fakeLimiter{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	for range 10 {
+		if _, err := w.ProcessOne(context.Background(), notification.ChannelSMS); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.calls != 10 {
+		t.Errorf("sends=%d, want 10: bad requests say nothing about provider health", s.calls)
 	}
 }

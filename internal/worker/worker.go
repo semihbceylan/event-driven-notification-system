@@ -2,11 +2,12 @@
 //
 // Each channel gets its own pool of sender goroutines. A sender loops:
 //
-//	claim the next due notification -> wait for a rate-limit slot -> send it
-//	-> record the result (sent, retry later, or failed)
+//	check the channel's circuit breaker -> claim the next due notification
+//	-> wait for a rate-limit slot -> send it -> record the result
+//	(sent, retry later, or failed)
 //
-// Channels have separate pools so a slow or failing provider for one channel
-// (say email) cannot hold up the others.
+// Channels have separate pools and breakers so a slow or failing provider
+// for one channel (say email) cannot hold up the others.
 package worker
 
 import (
@@ -17,6 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/semihbceylan/event-driven-notification-system/internal/breaker"
+	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
 )
@@ -42,7 +47,8 @@ type Limiter interface {
 type Config struct {
 	Channels          []notification.Channel
 	WorkersPerChannel int
-	// PollInterval is how long an idle sender sleeps when the queue is empty.
+	// PollInterval is how long an idle sender sleeps when the queue is empty
+	// or the channel's breaker is open.
 	PollInterval time.Duration
 	// LockTimeout is how long a claimed notification stays reserved. It must
 	// be longer than a rate-limit wait plus a provider call.
@@ -51,21 +57,47 @@ type Config struct {
 	RetryMaxDelay  time.Duration
 	// ReapInterval is how often stuck notifications are put back in the queue.
 	ReapInterval time.Duration
+	Breaker      breaker.Config
 }
 
 type Worker struct {
-	cfg     Config
-	queue   Queue
-	sender  Sender
-	limiter Limiter
-	logger  *slog.Logger
+	cfg      Config
+	queue    Queue
+	sender   Sender
+	limiter  Limiter
+	logger   *slog.Logger
+	metrics  *metrics.Worker
+	breakers map[notification.Channel]*breaker.Breaker
 
 	now  func() time.Time
 	rand func() float64
 }
 
-func New(cfg Config, q Queue, s Sender, l Limiter, logger *slog.Logger) *Worker {
-	return &Worker{cfg: cfg, queue: q, sender: s, limiter: l, logger: logger, now: time.Now, rand: rand.Float64}
+// New creates a worker. m may be nil, in which case metrics go to a private
+// registry that is never exported (handy in tests).
+func New(cfg Config, q Queue, s Sender, l Limiter, m *metrics.Worker, logger *slog.Logger) *Worker {
+	if m == nil {
+		m = metrics.NewWorker(prometheus.NewRegistry())
+	}
+	w := &Worker{
+		cfg: cfg, queue: q, sender: s, limiter: l, metrics: m, logger: logger,
+		breakers: make(map[notification.Channel]*breaker.Breaker),
+		now:      time.Now, rand: rand.Float64,
+	}
+	for _, ch := range cfg.Channels {
+		b := breaker.New(cfg.Breaker)
+		b.OnStateChange(func(from, to breaker.State) {
+			m.BreakerState(string(ch), int(to))
+			if to == breaker.Open {
+				logger.Warn("circuit breaker opened: pausing channel", "channel", ch, "from", from.String())
+			} else {
+				logger.Info("circuit breaker state changed", "channel", ch, "from", from.String(), "to", to.String())
+			}
+		})
+		m.BreakerState(string(ch), int(breaker.Closed))
+		w.breakers[ch] = b
+	}
+	return w
 }
 
 // Run starts all senders and the reaper, and blocks until ctx is cancelled
@@ -103,8 +135,22 @@ func (w *Worker) senderLoop(ctx context.Context, ch notification.Channel) {
 }
 
 // ProcessOne claims and delivers at most one notification. worked is false
-// if the queue had nothing due.
+// if nothing was done: the queue had nothing due, or the channel's breaker
+// is open.
 func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worked bool, err error) {
+	br := w.breakers[ch]
+	// While the breaker is open we do not even claim: queued notifications
+	// keep all their attempts until the provider is back.
+	if br != nil && !br.Allow() {
+		return false, nil
+	}
+	sent := false
+	defer func() {
+		if br != nil && !sent {
+			br.Release() // let another sender probe if this one never sent
+		}
+	}()
+
 	n, ok, err := w.queue.Claim(ctx, ch, w.cfg.LockTimeout)
 	if err != nil || !ok {
 		return false, err
@@ -121,6 +167,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	// is worse than a slightly slower shutdown.
 	jobCtx := context.WithoutCancel(ctx)
 
+	waitStart := w.now()
 	if err := w.limiter.Wait(ctx, string(ch)); err != nil {
 		// Shutting down, or Redis is unreachable. We never send without a
 		// rate-limit slot, so hand the notification back untouched.
@@ -132,6 +179,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 		}
 		return true, err
 	}
+	w.metrics.RateLimitWait(string(ch), w.now().Sub(waitStart))
 
 	start := w.now()
 	resp, sendErr := w.sender.Send(jobCtx, provider.Request{
@@ -141,9 +189,16 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 		IdempotencyKey: n.ID.String(),
 		CorrelationID:  deref(n.CorrelationID),
 	})
+	sent = true
 	attempt := notification.Attempt{StartedAt: start, Duration: w.now().Sub(start)}
 
 	if sendErr == nil {
+		if br != nil {
+			br.Success()
+		}
+		w.metrics.ProviderCall(string(ch), "success", attempt.Duration)
+		w.metrics.Processed(string(ch), "sent")
+		w.metrics.Delivered(string(ch), string(n.Priority), w.now().Sub(dueAt(n)))
 		if err = w.queue.MarkSent(jobCtx, n, resp.MessageID, attempt); err == nil {
 			log.Info("notification sent", "provider_message_id", resp.MessageID, "duration_ms", attempt.Duration.Milliseconds())
 		}
@@ -154,7 +209,22 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	attempt.StatusCode = pe.StatusCode
 	attempt.Error = pe.Error()
 
+	if br != nil {
+		if pe.Retryable {
+			br.Failure(pe.RetryAfter)
+		} else {
+			// A 4xx means the provider is up and rejected this one message.
+			br.Success()
+		}
+	}
+	result := "permanent_error"
+	if pe.Retryable {
+		result = "retryable_error"
+	}
+	w.metrics.ProviderCall(string(ch), result, attempt.Duration)
+
 	if !pe.Retryable || n.Attempts >= n.MaxAttempts {
+		w.metrics.Processed(string(ch), "failed")
 		err = w.queue.MarkFailed(jobCtx, n, attempt)
 		log.Warn("notification failed permanently", "error", attempt.Error, "status_code", pe.StatusCode,
 			"retryable", pe.Retryable, "max_attempts", n.MaxAttempts)
@@ -165,9 +235,19 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	if pe.RetryAfter > delay {
 		delay = pe.RetryAfter // the provider told us how long to back off
 	}
+	w.metrics.Processed(string(ch), "retry")
 	err = w.queue.MarkRetry(jobCtx, n, w.now().Add(delay), attempt)
 	log.Info("notification will be retried", "error", attempt.Error, "status_code", pe.StatusCode, "retry_in", delay.String())
 	return true, w.checkRecord(log, err)
+}
+
+// BreakerStates reports each channel's breaker state, for the health check.
+func (w *Worker) BreakerStates() map[string]string {
+	out := make(map[string]string, len(w.breakers))
+	for ch, b := range w.breakers {
+		out[string(ch)] = b.State().String()
+	}
+	return out
 }
 
 // checkRecord treats a lost lock as expected (logged, not an error): the
@@ -196,6 +276,14 @@ func (w *Worker) reaperLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// dueAt is when the notification became ready to send.
+func dueAt(n notification.Notification) time.Time {
+	if n.ScheduledAt != nil {
+		return *n.ScheduledAt
+	}
+	return n.CreatedAt
 }
 
 func sleep(ctx context.Context, d time.Duration) {

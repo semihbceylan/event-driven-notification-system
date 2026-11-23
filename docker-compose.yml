@@ -49,6 +49,11 @@ services:
       REDIS_ADDR: redis:6379
       PROVIDER_URL: ${PROVIDER_URL:-http://mockprovider:8090/send}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-100}
+      MAX_ATTEMPTS: ${MAX_ATTEMPTS:-5}
+      BREAKER_THRESHOLD: ${BREAKER_THRESHOLD:-5}
+      BREAKER_COOLDOWN: ${BREAKER_COOLDOWN:-5s}
+      BREAKER_MAX_COOLDOWN: ${BREAKER_MAX_COOLDOWN:-1m}
     ports:
       - "8080:8080"
     depends_on:
@@ -66,6 +71,13 @@ services:
     build: .
     command: ["worker"]
     environment: *app-env
+    ports:
+      - "9091:9091" # /healthz, /readyz, /breakers, /metrics
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9091/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
     depends_on:
       # The API runs the migrations, so the worker waits for it.
       api:
