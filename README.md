@@ -38,6 +38,7 @@ docker compose up --build
 | http://localhost:8080/docs | **Swagger UI**: try every endpoint in the browser |
 | http://localhost:8080/openapi.yaml | OpenAPI 3.1 spec |
 | http://localhost:8080/v1/metrics | Delivery metrics (JSON) |
+| http://localhost:16686 | **Jaeger**: distributed traces, from API request to every delivery attempt |
 | http://localhost:9090 | Prometheus |
 | http://localhost:9091/breakers | Worker: circuit breaker state per channel |
 | http://localhost:8090/admin/config | Mock provider: inject failures |
@@ -187,6 +188,8 @@ flowchart LR
     D[Dashboard<br/>web/, Vue] -->|REST + WebSocket| API
     W -.->|status events<br/>pub/sub| R
     R -.->|status events| API
+    J[Jaeger] -.-|OTLP traces| API
+    J -.-|OTLP traces| W
     PR[Prometheus] -.->|scrape /metrics| API
     PR -.->|scrape :9091/metrics| W
 ```
@@ -341,6 +344,18 @@ so a typo like `reciptient` fails loudly. Errors list every invalid field at onc
   never raw paths, to bound cardinality), `notifications_queue_depth`, `notifications_processed_total`,
   `provider_request_duration_seconds`, `notification_delivery_latency_seconds`, `rate_limit_wait_seconds`
   and `circuit_breaker_state`.
+- **Distributed tracing** (OpenTelemetry → Jaeger). The API and the worker never call each other, and a
+  message may be sent minutes later or retried several times. So the API stores the request's W3C
+  `traceparent` on the notification row, and the worker continues that trace for every delivery attempt.
+  One trace then shows the API request and its SQL, then each attempt with its rate-limit check, provider
+  call (which also receives a `traceparent` header) and database update, with retries in between.
+  Measured: a batch sent while the provider failed half its requests produced one trace of 106 spans
+  over 18.6s, covering 7 attempts (3 sent, 4 retries).
+  - **Sampling:** only incoming API requests start traces. Idle queue polls, the reaper and Prometheus
+    scrapes would otherwise flood Jaeger, so the worker only continues existing traces. Health checks,
+    `/metrics` and the WebSocket are not traced.
+  - **Off by default** outside docker compose: tracing turns on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+  - **Logs:** each log line carries `trace_id` next to `correlation_id`.
 - **Health:** `/healthz` (process up) and `/readyz` (Postgres and Redis reachable) on both the API and
   the worker. An open circuit breaker does not make the worker unready: it is waiting on purpose, and
   restarting it would not help.
@@ -362,6 +377,7 @@ All settings are environment variables; docker compose passes the main ones thro
 | `LOCK_TIMEOUT` | `2m` | How long a claim is reserved before the reaper may requeue it |
 | `POLL_INTERVAL` | `200ms` | Idle sender sleep when the queue is empty |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (compose: Jaeger) | Where to send traces; tracing is off when unset |
 
 ## Testing
 
@@ -420,6 +436,7 @@ internal/httpapi     Handlers, middleware, routing, docs
 internal/metrics     Prometheus metrics
 internal/logging     slog setup, correlation ID context
 internal/events      Status events: Redis pub/sub and WebSocket fan-out
+internal/tracing     OpenTelemetry setup, sampling, trace context propagation through the database
 web/                 Vue dashboard (Vite, TypeScript, nginx)
 migrations/          Versioned SQL migrations (goose)
 deploy/prometheus/   Prometheus scrape config
