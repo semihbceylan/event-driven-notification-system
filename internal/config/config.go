@@ -26,6 +26,12 @@ type Config struct {
 	// MaxAttempts is how many times delivery is tried before a
 	// notification is marked failed.
 	MaxAttempts int
+
+	PollInterval   time.Duration
+	LockTimeout    time.Duration
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
+	ReapInterval   time.Duration
 }
 
 func Load() (Config, error) {
@@ -49,6 +55,25 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxAttempts, err = getInt("MAX_ATTEMPTS", 5); err != nil {
 		return Config{}, err
+	}
+	durations := []struct {
+		key      string
+		dst      *time.Duration
+		fallback time.Duration
+	}{
+		{"POLL_INTERVAL", &cfg.PollInterval, 200 * time.Millisecond},
+		{"LOCK_TIMEOUT", &cfg.LockTimeout, 2 * time.Minute},
+		{"RETRY_BASE_DELAY", &cfg.RetryBaseDelay, 2 * time.Second},
+		{"RETRY_MAX_DELAY", &cfg.RetryMaxDelay, 10 * time.Minute},
+		{"REAP_INTERVAL", &cfg.ReapInterval, 30 * time.Second},
+	}
+	for _, d := range durations {
+		if *d.dst, err = getDuration(d.key, d.fallback); err != nil {
+			return Config{}, err
+		}
+	}
+	if cfg.LockTimeout <= cfg.ProviderTimeout {
+		return Config{}, fmt.Errorf("config: LOCK_TIMEOUT (%s) must be longer than PROVIDER_TIMEOUT (%s)", cfg.LockTimeout, cfg.ProviderTimeout)
 	}
 	return cfg, nil
 }
