@@ -32,3 +32,6 @@ func writeError(w http.ResponseWriter, status int, code, message string, details
 func writeValidationError(w http.ResponseWriter, details []notification.FieldError) {
 	writeError(w, http.StatusUnprocessableEntity, "validation_failed", "request validation failed", details)
 }
+
+// WriteJSON is writeJSON for other packages (the worker's small HTTP server).
+func WriteJSON(w http.ResponseWriter, status int, body any) { writeJSON(w, status, body) }

@@ -208,8 +208,8 @@ func TestStore(t *testing.T) {
 		}
 
 		_, err = store.Cancel(ctx, n.ID)
-		var nc *NotCancellableError
-		if !errors.As(err, &nc) || nc.Status != StatusCancelled {
+		var nc *InvalidStateError
+		if !errors.As(err, &nc) || nc.Current != StatusCancelled {
 			t.Errorf("second cancel: err = %v", err)
 		}
 
@@ -227,9 +227,35 @@ func TestStore(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err := store.Cancel(ctx, n.ID)
-		var nc *NotCancellableError
-		if !errors.As(err, &nc) || nc.Status != StatusProcessing {
-			t.Errorf("err = %v, want NotCancellableError{processing}", err)
+		var nc *InvalidStateError
+		if !errors.As(err, &nc) || nc.Current != StatusProcessing {
+			t.Errorf("err = %v, want InvalidStateError{processing}", err)
+		}
+	})
+
+	t.Run("retry a failed notification", func(t *testing.T) {
+		n := newSMS("retry me", "")
+		if _, err := store.Create(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		// Not failed yet: retry is refused.
+		var ise *InvalidStateError
+		if _, err := store.Retry(ctx, n.ID, 3); !errors.As(err, &ise) || ise.Current != StatusPending {
+			t.Fatalf("retry pending: err = %v", err)
+		}
+
+		if _, err := pool.Exec(ctx, `UPDATE notifications SET status='failed', attempts=5, max_attempts=5 WHERE id=$1`, n.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.Retry(ctx, n.ID, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != StatusPending || got.Attempts != 5 || got.MaxAttempts != 8 {
+			t.Errorf("after retry: status=%s attempts=%d max=%d, want pending 5 8", got.Status, got.Attempts, got.MaxAttempts)
+		}
+		if _, err := store.Retry(ctx, uuid.New(), 3); !errors.Is(err, ErrNotFound) {
+			t.Errorf("retry missing: err = %v", err)
 		}
 	})
 }

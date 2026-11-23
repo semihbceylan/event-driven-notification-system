@@ -14,14 +14,26 @@ import (
 
 var ErrNotFound = errors.New("notification not found")
 
-// NotCancellableError is returned when cancelling a notification that has
-// already left the pending state.
-type NotCancellableError struct {
-	Status Status
+// InvalidStateError is returned when an action is not allowed in the
+// notification's current status, e.g. cancelling one that was already sent.
+type InvalidStateError struct {
+	Action   string // "cancel" or "retry"
+	Required Status // the status the action needs
+	Current  Status
 }
 
-func (e *NotCancellableError) Error() string {
-	return fmt.Sprintf("only pending notifications can be cancelled; this one is %s", e.Status)
+func (e *InvalidStateError) Error() string {
+	return fmt.Sprintf("only %s notifications can be %s; this one is %s", e.Required, pastTense(e.Action), e.Current)
+}
+
+func pastTense(action string) string {
+	switch action {
+	case "cancel":
+		return "cancelled"
+	case "retry":
+		return "retried"
+	}
+	return action + "ed"
 }
 
 // IdempotencyConflictError is returned when an idempotency key is reused for
@@ -204,7 +216,31 @@ func (s *Store) Cancel(ctx context.Context, id uuid.UUID) (Notification, error) 
 	if err != nil {
 		return Notification{}, err
 	}
-	return Notification{}, &NotCancellableError{Status: current.Status}
+	return Notification{}, &InvalidStateError{Action: "cancel", Required: StatusPending, Current: current.Status}
+}
+
+// Retry puts a failed notification back in the queue, for example after a
+// provider outage that lasted longer than the retry schedule. It gets
+// extraAttempts more tries; attempts is not reset, so the numbering in
+// delivery_attempts keeps going and the audit trail stays readable.
+func (s *Store) Retry(ctx context.Context, id uuid.UUID, extraAttempts int) (Notification, error) {
+	n, err := scanNotification(s.pool.QueryRow(ctx, `
+		UPDATE notifications
+		SET status = 'pending', max_attempts = attempts + $2, next_attempt_at = now(),
+		    locked_until = NULL, updated_at = now()
+		WHERE id = $1 AND status = 'failed'
+		RETURNING `+columns, id, extraAttempts))
+	if err == nil {
+		return n, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Notification{}, fmt.Errorf("retry notification: %w", err)
+	}
+	current, err := s.Get(ctx, id)
+	if err != nil {
+		return Notification{}, err
+	}
+	return Notification{}, &InvalidStateError{Action: "retry", Required: StatusFailed, Current: current.Status}
 }
 
 // List returns one page of notifications, newest first, and the cursor for

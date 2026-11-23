@@ -96,9 +96,25 @@ func (f *fakeRepo) Cancel(_ context.Context, id uuid.UUID) (notification.Notific
 		return notification.Notification{}, notification.ErrNotFound
 	}
 	if n.Status != notification.StatusPending {
-		return notification.Notification{}, &notification.NotCancellableError{Status: n.Status}
+		return notification.Notification{}, &notification.InvalidStateError{Action: "cancel", Required: notification.StatusPending, Current: n.Status}
 	}
 	n.Status = notification.StatusCancelled
+	f.byID[id] = n
+	return n, nil
+}
+
+func (f *fakeRepo) Retry(_ context.Context, id uuid.UUID, extra int) (notification.Notification, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.byID[id]
+	if !ok {
+		return notification.Notification{}, notification.ErrNotFound
+	}
+	if n.Status != notification.StatusFailed {
+		return notification.Notification{}, &notification.InvalidStateError{Action: "retry", Required: notification.StatusFailed, Current: n.Status}
+	}
+	n.Status = notification.StatusPending
+	n.MaxAttempts = n.Attempts + extra
 	f.byID[id] = n
 	return n, nil
 }
@@ -112,7 +128,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeRepo) {
 	repo := newFakeRepo()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := &NotificationHandler{Repo: repo, MaxAttempts: 5}
-	srv := httptest.NewServer(NewRouter(logger, HealthHandler{}, h))
+	srv := httptest.NewServer(NewRouter(Deps{Logger: logger, Notifications: h}))
 	t.Cleanup(srv.Close)
 	return srv, repo
 }
@@ -313,5 +329,28 @@ func TestListValidatesQuery(t *testing.T) {
 	}
 	if data, ok := body["data"].([]any); !ok || len(data) != 0 {
 		t.Errorf("empty list must be [], got %v", body["data"])
+	}
+}
+
+func TestRetry(t *testing.T) {
+	srv, repo := newTestServer(t)
+	_, created := do(t, http.MethodPost, srv.URL+"/v1/notifications", smsBody, nil)
+	id := created["id"].(string)
+
+	resp, body := do(t, http.MethodPost, srv.URL+"/v1/notifications/"+id+"/retry", "", nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("retry pending: status = %d, body = %v", resp.StatusCode, body)
+	}
+	if errObj := body["error"].(map[string]any); errObj["code"] != "not_retryable" {
+		t.Errorf("code = %v", errObj["code"])
+	}
+
+	n := repo.byID[uuid.MustParse(id)]
+	n.Status, n.Attempts = notification.StatusFailed, 5
+	repo.byID[n.ID] = n
+
+	resp, body = do(t, http.MethodPost, srv.URL+"/v1/notifications/"+id+"/retry", "", nil)
+	if resp.StatusCode != http.StatusOK || body["status"] != "pending" || body["max_attempts"] != float64(10) {
+		t.Errorf("retry failed: status = %d, body = %v", resp.StatusCode, body)
 	}
 }

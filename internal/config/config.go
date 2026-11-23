@@ -32,6 +32,16 @@ type Config struct {
 	RetryBaseDelay time.Duration
 	RetryMaxDelay  time.Duration
 	ReapInterval   time.Duration
+
+	// Circuit breaker, per channel: after BreakerThreshold consecutive
+	// temporary failures the channel pauses for BreakerCooldown, doubling
+	// up to BreakerMaxCooldown while the provider stays down.
+	BreakerThreshold   int
+	BreakerCooldown    time.Duration
+	BreakerMaxCooldown time.Duration
+
+	// WorkerHTTPAddr is where the worker serves /healthz, /readyz and /metrics.
+	WorkerHTTPAddr string
 }
 
 func Load() (Config, error) {
@@ -41,6 +51,8 @@ func Load() (Config, error) {
 		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
 		ProviderURL: getEnv("PROVIDER_URL", "http://localhost:8090/send"),
+
+		WorkerHTTPAddr: getEnv("WORKER_HTTP_ADDR", ":9091"),
 	}
 
 	var err error
@@ -56,6 +68,9 @@ func Load() (Config, error) {
 	if cfg.MaxAttempts, err = getInt("MAX_ATTEMPTS", 5); err != nil {
 		return Config{}, err
 	}
+	if cfg.BreakerThreshold, err = getInt("BREAKER_THRESHOLD", 5); err != nil {
+		return Config{}, err
+	}
 	durations := []struct {
 		key      string
 		dst      *time.Duration
@@ -66,6 +81,8 @@ func Load() (Config, error) {
 		{"RETRY_BASE_DELAY", &cfg.RetryBaseDelay, 2 * time.Second},
 		{"RETRY_MAX_DELAY", &cfg.RetryMaxDelay, 10 * time.Minute},
 		{"REAP_INTERVAL", &cfg.ReapInterval, 30 * time.Second},
+		{"BREAKER_COOLDOWN", &cfg.BreakerCooldown, 5 * time.Second},
+		{"BREAKER_MAX_COOLDOWN", &cfg.BreakerMaxCooldown, time.Minute},
 	}
 	for _, d := range durations {
 		if *d.dst, err = getDuration(d.key, d.fallback); err != nil {

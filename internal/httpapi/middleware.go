@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
+	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 )
 
 const CorrelationIDHeader = "X-Correlation-ID"
@@ -35,8 +36,9 @@ func (r *statusRecorder) Unwrap() http.ResponseWriter {
 }
 
 // RequestContext gives every request a correlation ID and a logger that
-// includes it, then logs one line per request when it finishes.
-func RequestContext(base *slog.Logger) func(http.Handler) http.Handler {
+// includes it, then logs one line per request when it finishes and records
+// request metrics (m may be nil).
+func RequestContext(base *slog.Logger, m *metrics.HTTP) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -52,13 +54,21 @@ func RequestContext(base *slog.Logger) func(http.Handler) http.Handler {
 			ctx = logging.WithLogger(ctx, logger)
 
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-			next.ServeHTTP(rec, r.WithContext(ctx))
+			req := r.WithContext(ctx)
+			next.ServeHTTP(rec, req)
+			// The mux stores the matched route pattern on the request it
+			// was given, so read it from req, not r.
+			elapsed := time.Since(start)
 
+			if m != nil {
+				m.Observe(r.Method, req.Pattern, rec.status, elapsed)
+			}
 			logger.Info("http request",
 				"method", r.Method,
 				"path", r.URL.Path,
+				"route", req.Pattern,
 				"status", rec.status,
-				"duration_ms", time.Since(start).Milliseconds(),
+				"duration_ms", elapsed.Milliseconds(),
 			)
 		})
 	}
