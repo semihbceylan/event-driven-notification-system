@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
+	"github.com/semihbceylan/event-driven-notification-system/internal/tracing"
 )
 
 func main() {
@@ -43,6 +45,16 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	shutdownTracing, err := tracing.Setup(ctx, "api", tracing.ServerRoots, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(flushCtx) // send spans still buffered
+	}()
+
 	pool, err := database.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -55,6 +67,9 @@ func run(logger *slog.Logger) error {
 
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	defer func() { _ = rdb.Close() }()
+	if err := redisotel.InstrumentTracing(rdb); err != nil {
+		return err
+	}
 
 	health := httpapi.HealthHandler{Deps: map[string]httpapi.Pinger{
 		"postgres": pool,

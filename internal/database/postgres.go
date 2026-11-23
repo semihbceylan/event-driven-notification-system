@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -17,9 +18,16 @@ import (
 // Connect opens a pool and retries for a short while, because in Docker
 // Compose the database may still be starting when the service starts.
 func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("database: parse config: %w", err)
+	}
+	// A span per query, as a child of whatever span is in the context.
+	// Queries outside a trace are not recorded (see internal/tracing).
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("database: open pool: %w", err)
 	}
 
 	deadline := time.Now().Add(30 * time.Second)

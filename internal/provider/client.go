@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type Request struct {
@@ -53,7 +55,12 @@ type Client struct {
 }
 
 func NewClient(url string, timeout time.Duration) *Client {
-	return &Client{url: url, http: &http.Client{Timeout: timeout}}
+	return &Client{url: url, http: &http.Client{
+		Timeout: timeout,
+		// A client span per provider call, and a traceparent header so a
+		// provider that supports tracing can join the trace.
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}}
 }
 
 // Send delivers one message. Every failure is returned as *Error.

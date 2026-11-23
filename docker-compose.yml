@@ -54,6 +54,8 @@ services:
       BREAKER_THRESHOLD: ${BREAKER_THRESHOLD:-5}
       BREAKER_COOLDOWN: ${BREAKER_COOLDOWN:-5s}
       BREAKER_MAX_COOLDOWN: ${BREAKER_MAX_COOLDOWN:-1m}
+      # Traces go to Jaeger; set to "" to turn tracing off.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT-http://jaeger:4318}
     ports:
       - "8080:8080"
     depends_on:
@@ -94,6 +96,14 @@ services:
         condition: service_healthy
       worker:
         condition: service_healthy
+
+  # Distributed tracing UI: http://localhost:16686
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
 
   prometheus:
     image: prom/prometheus:v2.55.1
