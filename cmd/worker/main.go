@@ -21,6 +21,7 @@ import (
 	"github.com/semihbceylan/event-driven-notification-system/internal/breaker"
 	"github.com/semihbceylan/event-driven-notification-system/internal/config"
 	"github.com/semihbceylan/event-driven-notification-system/internal/database"
+	"github.com/semihbceylan/event-driven-notification-system/internal/events"
 	"github.com/semihbceylan/event-driven-notification-system/internal/httpapi"
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
@@ -84,6 +85,8 @@ func run(logger *slog.Logger) error {
 		metrics.NewWorker(reg),
 		logger,
 	)
+
+	w.SetEventPublisher(events.NewPublisher(rdb, logger))
 
 	// Health and metrics. An open circuit breaker does not make the worker
 	// unhealthy: it is doing its job by waiting, and restarting it would not

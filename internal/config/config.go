@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,6 +43,10 @@ type Config struct {
 
 	// WorkerHTTPAddr is where the worker serves /healthz, /readyz and /metrics.
 	WorkerHTTPAddr string
+
+	// AllowedOrigins are extra browser origins (host patterns, e.g.
+	// "localhost:5173") allowed to open the WebSocket. Comma-separated.
+	AllowedOrigins []string
 }
 
 func Load() (Config, error) {
@@ -53,6 +58,11 @@ func Load() (Config, error) {
 		ProviderURL: getEnv("PROVIDER_URL", "http://localhost:8090/send"),
 
 		WorkerHTTPAddr: getEnv("WORKER_HTTP_ADDR", ":9091"),
+	}
+	for _, o := range strings.Split(getEnv("ALLOWED_ORIGINS", "localhost:5173,localhost:3000"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			cfg.AllowedOrigins = append(cfg.AllowedOrigins, o)
+		}
 	}
 
 	var err error

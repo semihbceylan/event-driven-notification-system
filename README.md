@@ -12,6 +12,7 @@ delivers them through an external provider. It covers:
 ## Contents
 
 - [Quick start](#quick-start)
+- [Dashboard](#dashboard)
 - [API examples](#api-examples)
 - [Architecture](#architecture)
 - [Design decisions](#design-decisions)
@@ -31,6 +32,7 @@ docker compose up --build
 
 | URL | What |
 |---|---|
+| http://localhost:3000 | **Dashboard**: send notifications, watch them live, simulate an outage |
 | http://localhost:8080/docs | **Swagger UI**: try every endpoint in the browser |
 | http://localhost:8080/openapi.yaml | OpenAPI 3.1 spec |
 | http://localhost:8080/v1/metrics | Delivery metrics (JSON) |
@@ -52,6 +54,25 @@ By default the worker sends to a **built-in mock provider**, so everything works
 3. `docker compose up -d`. Requests show up at `https://webhook.site/#!/<uuid>`.
 
 Free webhook.site URLs limit the number of requests and expire, so use the mock for load tests.
+
+## Dashboard
+
+A Vue 3 + TypeScript app (`web/`), served by nginx at http://localhost:3000:
+
+- **Metrics per channel** (polled every 2s): queue (due, waiting, sending), sent, failed, delivery and
+  attempt success rates, p95 provider and delivery latency, and circuit breaker state.
+- **Live feed** over WebSocket (`GET /v1/ws`): rows change from pending → processing → sent as the
+  worker delivers them, with cancel and retry buttons.
+- **Send form** with optional scheduling, and **Burst 100/1000** buttons that send a mixed batch to show
+  priorities and rate limiting.
+- **Simulate outage**: switches the mock provider to 503s. The breaker opens, messages wait instead of
+  failing, and they drain once you bring it back.
+
+The worker and API publish every status change to Redis pub/sub, and each API replica forwards events to
+its WebSocket clients. Events are best-effort; the dashboard reloads from the API after reconnecting.
+
+For development: `cd web && npm install && npm run dev` (http://localhost:5173, proxying to the
+compose stack).
 
 ## API examples
 
@@ -146,6 +167,9 @@ flowchart LR
     W -->|claim with SKIP LOCKED<br/>record result| PG
     W -->|rate-limit slot<br/>atomic Lua script| R[(Redis)]
     W -->|POST to/channel/content| P[Provider<br/>webhook.site or mock]
+    D[Dashboard<br/>web/, Vue] -->|REST + WebSocket| API
+    W -.->|status events<br/>pub/sub| R
+    R -.->|status events| API
     PR[Prometheus] -.->|scrape /metrics| API
     PR -.->|scrape :9091/metrics| W
 ```
@@ -314,6 +338,7 @@ All settings are environment variables; docker compose passes the main ones thro
 
 ```bash
 make test   # go test -race ./... (integration tests start Postgres and Redis with testcontainers; needs Docker)
+cd web && npm test   # dashboard unit tests (vitest)
 ```
 
 | Layer | What is covered |
@@ -321,6 +346,8 @@ make test   # go test -race ./... (integration tests start Postgres and Redis wi
 | Unit | Validation rules, backoff, circuit breaker states, provider error classification, worker decisions (sent/retry/fail, breaker stops claims, shutdown releases work), HTTP handlers |
 | Integration (real Postgres and Redis) | Idempotency under 20 concurrent duplicates; 10 workers never claim the same row; priority order; fencing against stale workers; reaper; pagination and filters; metrics queries; limiter never exceeds its limit across 8 concurrent callers |
 | Contract | Every route is in `openapi.yaml` and vice versa; every `$ref` resolves |
+| WebSocket | Real connection through the middleware: events are delivered, filtered by batch, and clients are cleaned up on disconnect; slow clients are dropped |
+| Dashboard | Merging live events: out-of-order events are ignored, errors are kept while retrying and cleared once sent |
 
 **Try the failure handling yourself** with the stack running (`PROVIDER_URL` unset, so the mock is used):
 
@@ -356,6 +383,8 @@ internal/provider    Provider HTTP client and error classification
 internal/httpapi     Handlers, middleware, routing, docs
 internal/metrics     Prometheus metrics
 internal/logging     slog setup, correlation ID context
+internal/events      Status events: Redis pub/sub and WebSocket fan-out
+web/                 Vue dashboard (Vite, TypeScript, nginx)
 migrations/          Versioned SQL migrations (goose)
 deploy/prometheus/   Prometheus scrape config
 ```

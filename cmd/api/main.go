@@ -18,6 +18,7 @@ import (
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/config"
 	"github.com/semihbceylan/event-driven-notification-system/internal/database"
+	"github.com/semihbceylan/event-driven-notification-system/internal/events"
 	"github.com/semihbceylan/event-driven-notification-system/internal/httpapi"
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
@@ -63,7 +64,12 @@ func run(logger *slog.Logger) error {
 	notifications := &httpapi.NotificationHandler{
 		Repo:        store,
 		MaxAttempts: cfg.MaxAttempts,
+		Events:      events.NewPublisher(rdb, logger),
 	}
+
+	// Forward status events from Redis to this replica's WebSocket clients.
+	hub := events.NewHub()
+	go events.Subscribe(ctx, rdb, logger, hub.Broadcast)
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -91,6 +97,7 @@ func run(logger *slog.Logger) error {
 			Metrics:       &httpapi.MetricsHandler{Stats: store},
 			Prometheus:    promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
 			HTTPMetrics:   metrics.NewHTTP(reg),
+			WS:            &httpapi.WSHandler{Hub: hub, AllowedOrigins: cfg.AllowedOrigins},
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,

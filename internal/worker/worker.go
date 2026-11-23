@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/breaker"
+	"github.com/semihbceylan/event-driven-notification-system/internal/events"
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
@@ -42,6 +43,12 @@ type Sender interface {
 
 type Limiter interface {
 	Wait(ctx context.Context, key string) error
+}
+
+// EventPublisher broadcasts status changes to live clients (the dashboard).
+// Optional; publishing is best-effort and never fails a delivery.
+type EventPublisher interface {
+	Publish(ctx context.Context, evs ...events.Event)
 }
 
 type Config struct {
@@ -68,6 +75,7 @@ type Worker struct {
 	logger   *slog.Logger
 	metrics  *metrics.Worker
 	breakers map[notification.Channel]*breaker.Breaker
+	events   EventPublisher
 
 	now  func() time.Time
 	rand func() float64
@@ -98,6 +106,22 @@ func New(cfg Config, q Queue, s Sender, l Limiter, m *metrics.Worker, logger *sl
 		w.breakers[ch] = b
 	}
 	return w
+}
+
+// SetEventPublisher enables live status events.
+func (w *Worker) SetEventPublisher(p EventPublisher) { w.events = p }
+
+// emit publishes n's new state. A failed record (e.g. lost lock) is not
+// announced, since the change did not happen.
+func (w *Worker) emit(ctx context.Context, n notification.Notification, status notification.Status, lastErr string, recordErr error) {
+	if w.events == nil || recordErr != nil {
+		return
+	}
+	n.Status = status
+	if lastErr != "" {
+		n.LastError = &lastErr
+	}
+	w.events.Publish(ctx, events.FromNotification(n, w.now()))
 }
 
 // Run starts all senders and the reaper, and blocks until ctx is cancelled
@@ -156,6 +180,8 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 		return false, err
 	}
 
+	w.emit(ctx, n, notification.StatusProcessing, "", nil)
+
 	log := w.logger.With(
 		"notification_id", n.ID,
 		"channel", n.Channel,
@@ -171,9 +197,12 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	if err := w.limiter.Wait(ctx, string(ch)); err != nil {
 		// Shutting down, or Redis is unreachable. We never send without a
 		// rate-limit slot, so hand the notification back untouched.
-		if relErr := w.queue.Release(jobCtx, n); relErr != nil {
+		relErr := w.queue.Release(jobCtx, n)
+		if relErr != nil {
 			log.Warn("could not release notification", "error", relErr)
 		}
+		n.Attempts--
+		w.emit(jobCtx, n, notification.StatusPending, "", relErr)
 		if errors.Is(err, context.Canceled) {
 			return true, nil
 		}
@@ -202,6 +231,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 		if err = w.queue.MarkSent(jobCtx, n, resp.MessageID, attempt); err == nil {
 			log.Info("notification sent", "provider_message_id", resp.MessageID, "duration_ms", attempt.Duration.Milliseconds())
 		}
+		w.emit(jobCtx, n, notification.StatusSent, "", err)
 		return true, w.checkRecord(log, err)
 	}
 
@@ -226,6 +256,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	if !pe.Retryable || n.Attempts >= n.MaxAttempts {
 		w.metrics.Processed(string(ch), "failed")
 		err = w.queue.MarkFailed(jobCtx, n, attempt)
+		w.emit(jobCtx, n, notification.StatusFailed, attempt.Error, err)
 		log.Warn("notification failed permanently", "error", attempt.Error, "status_code", pe.StatusCode,
 			"retryable", pe.Retryable, "max_attempts", n.MaxAttempts)
 		return true, w.checkRecord(log, err)
@@ -237,6 +268,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	}
 	w.metrics.Processed(string(ch), "retry")
 	err = w.queue.MarkRetry(jobCtx, n, w.now().Add(delay), attempt)
+	w.emit(jobCtx, n, notification.StatusPending, attempt.Error, err)
 	log.Info("notification will be retried", "error", attempt.Error, "status_code", pe.StatusCode, "retry_in", delay.String())
 	return true, w.checkRecord(log, err)
 }
