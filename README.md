@@ -137,6 +137,21 @@ curl -s 'localhost:8080/v1/notifications?status=failed&channel=sms&from=2026-11-
 # → {"data":[...],"next_cursor":"MTc2Mzkx..."}   pass it as &cursor=... for the next page
 ```
 
+**Templates:** store content with `{{variable}}` placeholders once, then send by name.
+
+```bash
+curl -s -X PUT localhost:8080/v1/templates/order_shipped -H 'Content-Type: application/json' \
+  -d '{"channel":"sms","content":"Merhaba {{name}}, siparişiniz {{order_id}} kargoya verildi!"}'
+# → 201 {"name":"order_shipped","variables":["name","order_id"],...}
+
+curl -s -X POST localhost:8080/v1/notifications -H 'Content-Type: application/json' \
+  -d '{"recipient":"+905551234567","channel":"sms","template":"order_shipped","variables":{"name":"Ayşe","order_id":"TR-1234"}}'
+# → {"content":"Merhaba Ayşe, siparişiniz TR-1234 kargoya verildi!","template":"order_shipped",...}
+```
+
+A missing variable is a validation error (`"variables": "missing values for: order_id"`). Templates also
+work per item in batches; each template is loaded once per request.
+
 **Cancel** (only while `pending`) **or retry** (only once `failed`):
 
 ```bash
@@ -288,6 +303,18 @@ than sending without a limit.
 
 Limits count characters, not bytes, so Turkish text is not penalised. Unknown JSON fields are rejected,
 so a typo like `reciptient` fails loudly. Errors list every invalid field at once.
+
+### Templates
+
+- **Rendered when the notification is created,** and the rendered text is stored. Editing or deleting a
+  template never changes a notification that is already queued, and the audit trail shows exactly what
+  was sent. `template_name` records where it came from.
+- **Plain `{{name}}` substitution rather than Go's `text/template`.** Templates are written by API clients,
+  and `text/template` has loops and function calls, which are unnecessary here and a risk. Substituted
+  values are not parsed again, so a variable containing `{{...}}` is inserted as literal text.
+- **Errors surface early:** malformed placeholders and over-long content are rejected when the template is
+  saved, and missing variables when a notification is created. The rendered text then goes through the
+  channel's normal length checks.
 
 ### Database design
 
