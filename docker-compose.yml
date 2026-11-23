@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: notify
+      POSTGRES_PASSWORD: notify
+      POSTGRES_DB: notify
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notify -d notify"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Stands in for webhook.site so everything runs offline.
+  # Set PROVIDER_URL to your webhook.site URL to use the real one.
+  mockprovider:
+    build: .
+    command: ["mockprovider"]
+    environment:
+      FAILURE_RATE: ${MOCK_FAILURE_RATE:-0.1}
+      LATENCY: ${MOCK_LATENCY:-30ms}
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: ["api"]
+    environment: &app-env
+      DATABASE_URL: postgres://notify:notify@postgres:5432/notify?sslmode=disable
+      REDIS_ADDR: redis:6379
+      PROVIDER_URL: ${PROVIDER_URL:-http://mockprovider:8090/send}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build: .
+    command: ["worker"]
+    environment: *app-env
+    depends_on:
+      # The API runs the migrations, so the worker waits for it.
+      api:
+        condition: service_healthy
+      mockprovider:
+        condition: service_healthy
+
+volumes:
+  pgdata:
