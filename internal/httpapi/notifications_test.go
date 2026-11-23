@@ -354,3 +354,163 @@ func TestRetry(t *testing.T) {
 		t.Errorf("retry failed: status = %d, body = %v", resp.StatusCode, body)
 	}
 }
+
+// fakeTemplates is an in-memory TemplateRepository.
+type fakeTemplates struct {
+	mu      sync.Mutex
+	byName  map[string]notification.Template
+	lookups int
+}
+
+func (f *fakeTemplates) PutTemplate(_ context.Context, name string, in notification.TemplateInput) (notification.Template, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.byName == nil {
+		f.byName = map[string]notification.Template{}
+	}
+	_, existed := f.byName[name]
+	t := notification.Template{Name: name, Channel: in.Channel, Content: in.Content, Variables: notification.Placeholders(in.Content)}
+	f.byName[name] = t
+	return t, !existed, nil
+}
+
+func (f *fakeTemplates) GetTemplate(_ context.Context, name string) (notification.Template, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookups++
+	t, ok := f.byName[name]
+	if !ok {
+		return notification.Template{}, notification.ErrTemplateNotFound
+	}
+	return t, nil
+}
+
+func (f *fakeTemplates) ListTemplates(context.Context) ([]notification.Template, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []notification.Template{}
+	for _, t := range f.byName {
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+func (f *fakeTemplates) DeleteTemplate(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.byName[name]; !ok {
+		return notification.ErrTemplateNotFound
+	}
+	delete(f.byName, name)
+	return nil
+}
+
+func newTemplateServer(t *testing.T) (*httptest.Server, *fakeTemplates) {
+	t.Helper()
+	tpls := &fakeTemplates{}
+	h := &NotificationHandler{Repo: newFakeRepo(), MaxAttempts: 5, Templates: tpls}
+	srv := httptest.NewServer(NewRouter(Deps{
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Notifications: h,
+		Templates:     &TemplateHandler{Repo: tpls},
+	}))
+	t.Cleanup(srv.Close)
+	return srv, tpls
+}
+
+func TestTemplateCRUD(t *testing.T) {
+	srv, _ := newTemplateServer(t)
+	url := srv.URL + "/v1/templates/order_shipped"
+
+	resp, body := do(t, http.MethodPut, url, `{"channel":"sms","content":"Hi {{name}}, order {{order_id}} shipped"}`, nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %v", resp.StatusCode, body)
+	}
+	if vars := body["variables"].([]any); len(vars) != 2 || vars[0] != "name" {
+		t.Errorf("variables = %v", body["variables"])
+	}
+	resp, _ = do(t, http.MethodPut, url, `{"channel":"sms","content":"Hey {{name}}"}`, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("replace: status %d, want 200", resp.StatusCode)
+	}
+	resp, body = do(t, http.MethodPut, srv.URL+"/v1/templates/Bad%20Name", `{"channel":"sms","content":"x"}`, nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("bad name: %d %v", resp.StatusCode, body)
+	}
+	resp, body = do(t, http.MethodGet, srv.URL+"/v1/templates", "", nil)
+	if resp.StatusCode != http.StatusOK || len(body["data"].([]any)) != 1 {
+		t.Errorf("list: %d %v", resp.StatusCode, body)
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, url, nil)
+	dresp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dresp.Body.Close()
+	if dresp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete: %d", dresp.StatusCode)
+	}
+	resp, _ = do(t, http.MethodGet, url, "", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("get deleted: %d", resp.StatusCode)
+	}
+}
+
+func TestCreateFromTemplate(t *testing.T) {
+	srv, tpls := newTemplateServer(t)
+	do(t, http.MethodPut, srv.URL+"/v1/templates/shipped", `{"channel":"sms","content":"Hi {{name}}, order {{order_id}} shipped"}`, nil)
+
+	resp, body := do(t, http.MethodPost, srv.URL+"/v1/notifications",
+		`{"recipient":"+905551234567","channel":"sms","template":"shipped","variables":{"name":"Ayse","order_id":"42"}}`, nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d: %v", resp.StatusCode, body)
+	}
+	if body["content"] != "Hi Ayse, order 42 shipped" || body["template"] != "shipped" {
+		t.Errorf("content=%v template=%v", body["content"], body["template"])
+	}
+
+	cases := []struct {
+		name, body, field string
+	}{
+		{"missing variable", `{"recipient":"+905551234567","channel":"sms","template":"shipped","variables":{"name":"A"}}`, "variables"},
+		{"unknown template", `{"recipient":"+905551234567","channel":"sms","template":"nope"}`, "template"},
+		{"wrong channel", `{"recipient":"a@example.com","channel":"email","template":"shipped","variables":{"name":"A","order_id":"1"}}`, "template"},
+		{"content and template", `{"recipient":"+905551234567","channel":"sms","content":"x","template":"shipped","variables":{"name":"A","order_id":"1"}}`, "content"},
+		{"variables without template", `{"recipient":"+905551234567","channel":"sms","content":"x","variables":{"a":"b"}}`, "variables"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := do(t, http.MethodPost, srv.URL+"/v1/notifications", tc.body, nil)
+			if resp.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("status %d: %v", resp.StatusCode, body)
+			}
+			details := body["error"].(map[string]any)["details"].([]any)
+			if len(details) != 1 || details[0].(map[string]any)["field"] != tc.field {
+				t.Errorf("details = %v, want one error on %q", details, tc.field)
+			}
+		})
+	}
+
+	// A batch looks each template up once, however many items use it.
+	tpls.lookups = 0
+	var items []string
+	for i := range 50 {
+		items = append(items, fmt.Sprintf(`{"recipient":"+90555%07d","channel":"sms","template":"shipped","variables":{"name":"U%d","order_id":"%d"}}`, i, i, i))
+	}
+	resp, body = do(t, http.MethodPost, srv.URL+"/v1/notifications/batch", `{"notifications":[`+strings.Join(items, ",")+`]}`, nil)
+	if resp.StatusCode != http.StatusCreated || body["created"] != float64(50) {
+		t.Fatalf("batch: %d %v", resp.StatusCode, body)
+	}
+	if tpls.lookups != 1 {
+		t.Errorf("template looked up %d times, want 1", tpls.lookups)
+	}
+
+	// Errors in a batch are indexed.
+	resp, body = do(t, http.MethodPost, srv.URL+"/v1/notifications/batch",
+		`{"notifications":[{"recipient":"+905551234567","channel":"sms","content":"ok"},{"recipient":"+905551234567","channel":"sms","template":"shipped"}]}`, nil)
+	details := body["error"].(map[string]any)["details"].([]any)
+	if resp.StatusCode != http.StatusUnprocessableEntity || details[0].(map[string]any)["field"] != "notifications[1].variables" {
+		t.Errorf("batch error: %d %v", resp.StatusCode, details)
+	}
+}

@@ -17,6 +17,7 @@ type Deps struct {
 	Prometheus    http.Handler    // GET /metrics
 	HTTPMetrics   *metrics.HTTP
 	WS            *WSHandler // GET /v1/ws
+	Templates     *TemplateHandler
 }
 
 // NewRouter wires every route and the shared middleware.
@@ -56,6 +57,14 @@ func routes(d Deps) []route {
 	}
 	if d.Metrics != nil {
 		rs = append(rs, route{"GET /v1/metrics", d.Metrics.Summary, true})
+	}
+	if d.Templates != nil {
+		rs = append(rs,
+			route{"GET /v1/templates", d.Templates.List, true},
+			route{"GET /v1/templates/{name}", d.Templates.Get, true},
+			route{"PUT /v1/templates/{name}", d.Templates.Put, true},
+			route{"DELETE /v1/templates/{name}", d.Templates.Delete, true},
+		)
 	}
 	if d.WS != nil {
 		rs = append(rs, route{"GET /v1/ws", d.WS.Serve, true})
