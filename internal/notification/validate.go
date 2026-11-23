@@ -38,6 +38,11 @@ type CreateInput struct {
 	Priority       Priority   `json:"priority,omitempty"`
 	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
 	IdempotencyKey string     `json:"idempotency_key,omitempty"`
+
+	// Template, instead of Content: the name of a stored template, rendered
+	// with Variables when the notification is created.
+	Template  string            `json:"template,omitempty"`
+	Variables map[string]string `json:"variables,omitempty"`
 }
 
 // FieldError describes one invalid field. Validation returns all of them at
@@ -53,6 +58,7 @@ func (in *CreateInput) Normalize() {
 	in.Channel = Channel(strings.ToLower(strings.TrimSpace(string(in.Channel))))
 	in.Priority = Priority(strings.ToLower(strings.TrimSpace(string(in.Priority))))
 	in.IdempotencyKey = strings.TrimSpace(in.IdempotencyKey)
+	in.Template = strings.TrimSpace(in.Template)
 	if in.Priority == "" {
 		in.Priority = PriorityNormal
 	}
@@ -95,7 +101,11 @@ func (in CreateInput) Validate(prefix string, now time.Time) []FieldError {
 	}
 
 	if strings.TrimSpace(in.Content) == "" {
-		add("content", "is required")
+		// With a template, content is filled in by ApplyTemplate; if that
+		// failed, it already reported why.
+		if in.Template == "" {
+			add("content", "is required")
+		}
 	} else if limit, ok := contentLimit(in.Channel); ok {
 		if n := utf8.RuneCountInString(in.Content); n > limit {
 			add("content", fmt.Sprintf("is %d characters; the limit for %s is %d", n, in.Channel, limit))
@@ -109,6 +119,10 @@ func (in CreateInput) Validate(prefix string, now time.Time) []FieldError {
 		case in.ScheduledAt.After(now.Add(MaxScheduleAhead)):
 			add("scheduled_at", "must be within one year")
 		}
+	}
+
+	if in.Template == "" && len(in.Variables) > 0 {
+		add("variables", "can only be used together with template")
 	}
 
 	if utf8.RuneCountInString(in.IdempotencyKey) > MaxIdempotencyKeyLength {

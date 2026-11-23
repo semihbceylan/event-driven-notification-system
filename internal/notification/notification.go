@@ -104,6 +104,7 @@ type Notification struct {
 	Attempts          int        `json:"attempts"`
 	MaxAttempts       int        `json:"max_attempts"`
 	NextAttemptAt     time.Time  `json:"next_attempt_at"`
+	TemplateName      *string    `json:"template,omitempty"`
 	ProviderMessageID *string    `json:"provider_message_id,omitempty"`
 	LastError         *string    `json:"last_error,omitempty"`
 	ScheduledAt       *time.Time `json:"scheduled_at,omitempty"`
@@ -139,6 +140,10 @@ func New(in CreateInput, batchID *uuid.UUID, correlationID string, maxAttempts i
 	}
 	if in.ScheduledAt != nil {
 		n.NextAttemptAt = *in.ScheduledAt
+	}
+	if in.Template != "" {
+		name := in.Template
+		n.TemplateName = &name
 	}
 	return n
 }
