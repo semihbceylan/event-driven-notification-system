@@ -105,6 +105,7 @@ type Notification struct {
 	MaxAttempts       int        `json:"max_attempts"`
 	NextAttemptAt     time.Time  `json:"next_attempt_at"`
 	TemplateName      *string    `json:"template,omitempty"`
+	TraceParent       *string    `json:"-"` // W3C trace context of the creating request
 	ProviderMessageID *string    `json:"provider_message_id,omitempty"`
 	LastError         *string    `json:"last_error,omitempty"`
 	ScheduledAt       *time.Time `json:"scheduled_at,omitempty"`

@@ -73,15 +73,15 @@ func NewStore(pool *pgxpool.Pool) *Store {
 
 const columns = `id, batch_id, idempotency_key, correlation_id, channel, recipient, content,
 	priority, status, attempts, max_attempts, next_attempt_at, provider_message_id,
-	last_error, scheduled_at, sent_at, created_at, updated_at, template_name`
+	last_error, scheduled_at, sent_at, created_at, updated_at, template_name, trace_parent`
 
 // ON CONFLICT ... DO NOTHING makes duplicate inserts a no-op instead of an
 // error. If two requests with the same key race, Postgres makes the second
 // one wait for the first to commit, so exactly one row is created.
 const insertSQL = `
 INSERT INTO notifications (id, batch_id, idempotency_key, correlation_id, channel, recipient,
-	content, priority, status, max_attempts, next_attempt_at, scheduled_at, template_name)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	content, priority, status, max_attempts, next_attempt_at, scheduled_at, template_name, trace_parent)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 RETURNING ` + columns
 
@@ -89,7 +89,7 @@ func insertArgs(n Notification) []any {
 	return []any{
 		n.ID, n.BatchID, n.IdempotencyKey, n.CorrelationID, string(n.Channel), n.Recipient,
 		n.Content, n.Priority.Rank(), string(n.Status), n.MaxAttempts, n.NextAttemptAt, n.ScheduledAt,
-		n.TemplateName,
+		n.TemplateName, n.TraceParent,
 	}
 }
 
@@ -323,7 +323,7 @@ func scanNotification(row pgx.Row) (Notification, error) {
 	err := row.Scan(
 		&n.ID, &n.BatchID, &n.IdempotencyKey, &n.CorrelationID, &channel, &n.Recipient, &n.Content,
 		&rank, &status, &n.Attempts, &n.MaxAttempts, &n.NextAttemptAt, &n.ProviderMessageID,
-		&n.LastError, &n.ScheduledAt, &n.SentAt, &n.CreatedAt, &n.UpdatedAt, &n.TemplateName,
+		&n.LastError, &n.ScheduledAt, &n.SentAt, &n.CreatedAt, &n.UpdatedAt, &n.TemplateName, &n.TraceParent,
 	)
 	if err != nil {
 		return Notification{}, err
