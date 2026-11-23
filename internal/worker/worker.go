@@ -19,12 +19,17 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/breaker"
 	"github.com/semihbceylan/event-driven-notification-system/internal/events"
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
+	"github.com/semihbceylan/event-driven-notification-system/internal/tracing"
 )
 
 // Queue is the part of notification.Store the worker uses.
@@ -180,6 +185,21 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 		return false, err
 	}
 
+	// Continue the trace of the API request that created the notification,
+	// so this attempt appears in the same trace (see internal/tracing).
+	ctx, span := otel.Tracer("worker").Start(
+		tracing.WithTraceParent(ctx, deref(n.TraceParent)),
+		"deliver "+string(n.Channel),
+		trace.WithAttributes(
+			attribute.String("notification.id", n.ID.String()),
+			attribute.String("notification.channel", string(n.Channel)),
+			attribute.String("notification.priority", string(n.Priority)),
+			attribute.Int("notification.attempt", n.Attempts),
+			attribute.String("correlation_id", deref(n.CorrelationID)),
+		),
+	)
+	defer span.End()
+
 	w.emit(ctx, n, notification.StatusProcessing, "", nil)
 
 	log := w.logger.With(
@@ -188,6 +208,9 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 		"attempt", n.Attempts,
 		"correlation_id", deref(n.CorrelationID),
 	)
+	if traceID := tracing.TraceID(ctx); traceID != "" {
+		log = log.With("trace_id", traceID)
+	}
 
 	// From here on, finish the job even if shutdown starts: a half-done send
 	// is worse than a slightly slower shutdown.
@@ -222,6 +245,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	attempt := notification.Attempt{StartedAt: start, Duration: w.now().Sub(start)}
 
 	if sendErr == nil {
+		span.SetAttributes(attribute.String("notification.outcome", "sent"))
 		if br != nil {
 			br.Success()
 		}
@@ -238,6 +262,8 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	pe := provider.AsError(sendErr)
 	attempt.StatusCode = pe.StatusCode
 	attempt.Error = pe.Error()
+	span.SetStatus(codes.Error, attempt.Error)
+	span.SetAttributes(attribute.Bool("provider.retryable", pe.Retryable))
 
 	if br != nil {
 		if pe.Retryable {
@@ -254,6 +280,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	w.metrics.ProviderCall(string(ch), result, attempt.Duration)
 
 	if !pe.Retryable || n.Attempts >= n.MaxAttempts {
+		span.SetAttributes(attribute.String("notification.outcome", "failed"))
 		w.metrics.Processed(string(ch), "failed")
 		err = w.queue.MarkFailed(jobCtx, n, attempt)
 		w.emit(jobCtx, n, notification.StatusFailed, attempt.Error, err)
@@ -266,6 +293,7 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	if pe.RetryAfter > delay {
 		delay = pe.RetryAfter // the provider told us how long to back off
 	}
+	span.SetAttributes(attribute.String("notification.outcome", "retry"), attribute.String("retry.in", delay.String()))
 	w.metrics.Processed(string(ch), "retry")
 	err = w.queue.MarkRetry(jobCtx, n, w.now().Add(delay), attempt)
 	w.emit(jobCtx, n, notification.StatusPending, attempt.Error, err)

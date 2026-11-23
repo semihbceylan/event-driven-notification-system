@@ -9,10 +9,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/breaker"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
+	"github.com/semihbceylan/event-driven-notification-system/internal/tracing"
 )
 
 // fakeQueue hands out one notification and records what the worker did
@@ -248,5 +253,52 @@ func TestPermanentErrorsDoNotOpenBreaker(t *testing.T) {
 	}
 	if s.calls != 10 {
 		t.Errorf("sends=%d, want 10: bad requests say nothing about provider health", s.calls)
+	}
+}
+
+func TestDeliveryContinuesTheCreatingTrace(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	// The API request that created the notification.
+	apiCtx, apiSpan := tp.Tracer("api").Start(context.Background(), "POST /v1/notifications")
+	n := pending(1)
+	tpHeader := tracing.TraceParent(apiCtx)
+	n.TraceParent = &tpHeader
+	apiSpan.End()
+
+	q := &fakeQueue{next: n}
+	s := &fakeSender{err: &provider.Error{StatusCode: 503, Retryable: true}}
+	if _, err := newTestWorker(q, s, fakeLimiter{}).ProcessOne(context.Background(), notification.ChannelSMS); err != nil {
+		t.Fatal(err)
+	}
+
+	var deliver sdktrace.ReadOnlySpan
+	for _, sp := range rec.Ended() {
+		if sp.Name() == "deliver sms" {
+			deliver = sp
+		}
+	}
+	if deliver == nil {
+		t.Fatal("no deliver span recorded")
+	}
+	if deliver.SpanContext().TraceID() != apiSpan.SpanContext().TraceID() {
+		t.Error("delivery is not in the API request's trace")
+	}
+	if deliver.Parent().SpanID() != apiSpan.SpanContext().SpanID() {
+		t.Error("delivery's parent is not the API request span")
+	}
+	if deliver.Status().Code != codes.Error {
+		t.Errorf("failed attempt should mark the span as error, got %v", deliver.Status())
+	}
+	attrs := map[string]string{}
+	for _, a := range deliver.Attributes() {
+		attrs[string(a.Key)] = a.Value.Emit()
+	}
+	if attrs["notification.outcome"] != "retry" || attrs["notification.id"] != n.ID.String() {
+		t.Errorf("attributes = %v", attrs)
 	}
 }

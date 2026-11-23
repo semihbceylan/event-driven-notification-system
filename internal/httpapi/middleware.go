@@ -10,9 +10,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
+	"github.com/semihbceylan/event-driven-notification-system/internal/tracing"
 )
 
 const CorrelationIDHeader = "X-Correlation-ID"
@@ -62,6 +66,11 @@ func RequestContext(base *slog.Logger, m *metrics.HTTP) func(http.Handler) http.
 			w.Header().Set(CorrelationIDHeader, id)
 
 			logger := base.With("correlation_id", id)
+			span := trace.SpanFromContext(r.Context())
+			if traceID := tracing.TraceID(r.Context()); traceID != "" {
+				logger = logger.With("trace_id", traceID)
+				span.SetAttributes(attribute.String("correlation_id", id))
+			}
 			ctx := logging.WithCorrelationID(r.Context(), id)
 			ctx = logging.WithLogger(ctx, logger)
 
@@ -71,6 +80,10 @@ func RequestContext(base *slog.Logger, m *metrics.HTTP) func(http.Handler) http.
 			// The mux stores the matched route pattern on the request it
 			// was given, so read it from req, not r.
 			elapsed := time.Since(start)
+			if req.Pattern != "" {
+				span.SetName(req.Pattern) // e.g. "POST /v1/notifications/batch"
+				span.SetAttributes(semconv.HTTPRoute(req.Pattern))
+			}
 
 			if m != nil {
 				m.Observe(r.Method, req.Pattern, rec.status, elapsed)

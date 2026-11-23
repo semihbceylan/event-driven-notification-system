@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 )
 
@@ -26,9 +28,21 @@ func NewRouter(d Deps) http.Handler {
 	for _, r := range routes(d) {
 		mux.HandleFunc(r.pattern, r.handler)
 	}
-	// Order matters: RequestContext runs first so that Recover can log
-	// panics with the correlation ID.
-	return RequestContext(d.Logger, d.HTTPMetrics)(Recover(mux))
+	// Order matters: otelhttp starts the request's span first, then
+	// RequestContext adds the correlation ID (and names the span after the
+	// route), then Recover can log panics with both.
+	h := RequestContext(d.Logger, d.HTTPMetrics)(Recover(mux))
+	return otelhttp.NewHandler(h, "http request",
+		// Health checks, scrapes and the long-lived WebSocket are not
+		// interesting traces.
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			switch r.URL.Path {
+			case "/healthz", "/readyz", "/metrics", "/v1/ws":
+				return false
+			}
+			return true
+		}),
+	)
 }
 
 type route struct {

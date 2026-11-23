@@ -15,6 +15,7 @@ import (
 	"github.com/semihbceylan/event-driven-notification-system/internal/events"
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
+	"github.com/semihbceylan/event-driven-notification-system/internal/tracing"
 )
 
 const (
@@ -50,6 +51,15 @@ type NotificationHandler struct {
 	Now         func() time.Time
 	Events      EventPublisher
 	Templates   TemplateRepository // optional; enables "template" in create requests
+}
+
+// traceParent is the request's trace context, to be stored with the
+// notification so the worker can continue the trace. Nil when not tracing.
+func traceParent(ctx context.Context) *string {
+	if tp := tracing.TraceParent(ctx); tp != "" {
+		return &tp
+	}
+	return nil
 }
 
 func (h *NotificationHandler) publish(ctx context.Context, ns ...notification.Notification) {
@@ -97,6 +107,7 @@ func (h *NotificationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	n := notification.New(in, nil, logging.CorrelationID(r.Context()), h.MaxAttempts, h.now())
+	n.TraceParent = traceParent(r.Context())
 	res, err := h.Repo.Create(r.Context(), n)
 	if err != nil {
 		h.handleStoreError(w, r, err)
@@ -156,8 +167,10 @@ func (h *NotificationHandler) CreateBatch(w http.ResponseWriter, r *http.Request
 	correlationID := logging.CorrelationID(r.Context())
 	now := h.now()
 	ns := make([]notification.Notification, len(req.Notifications))
+	tp := traceParent(r.Context())
 	for i, in := range req.Notifications {
 		ns[i] = notification.New(in, &batchID, correlationID, h.MaxAttempts, now)
+		ns[i].TraceParent = tp
 	}
 
 	results, err := h.Repo.CreateBatch(r.Context(), ns)
