@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/semihbceylan/event-driven-notification-system/internal/events"
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 )
@@ -38,10 +39,27 @@ type Repository interface {
 	List(ctx context.Context, f notification.ListFilter) ([]notification.Notification, *notification.Cursor, error)
 }
 
+// EventPublisher broadcasts status changes to live clients. Optional.
+type EventPublisher interface {
+	Publish(ctx context.Context, evs ...events.Event)
+}
+
 type NotificationHandler struct {
 	Repo        Repository
 	MaxAttempts int
 	Now         func() time.Time
+	Events      EventPublisher
+}
+
+func (h *NotificationHandler) publish(ctx context.Context, ns ...notification.Notification) {
+	if h.Events == nil || len(ns) == 0 {
+		return
+	}
+	evs := make([]events.Event, len(ns))
+	for i, n := range ns {
+		evs[i] = events.FromNotification(n, h.now())
+	}
+	h.Events.Publish(ctx, evs...)
 }
 
 func (h *NotificationHandler) now() time.Time {
@@ -80,6 +98,8 @@ func (h *NotificationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !res.Created {
 		w.Header().Set("Idempotent-Replayed", "true")
 		status = http.StatusOK
+	} else {
+		h.publish(r.Context(), res.Notification)
 	}
 	writeJSON(w, status, res.Notification)
 }
@@ -127,14 +147,17 @@ func (h *NotificationHandler) CreateBatch(w http.ResponseWriter, r *http.Request
 	}
 
 	resp := batchResponse{BatchID: batchID, Total: len(results), Notifications: make([]notification.Notification, len(results))}
+	var created []notification.Notification
 	for i, res := range results {
 		resp.Notifications[i] = res.Notification
 		if res.Created {
 			resp.Created++
+			created = append(created, res.Notification)
 		} else {
 			resp.Replayed++
 		}
 	}
+	h.publish(r.Context(), created...)
 	status := http.StatusCreated
 	if resp.Created == 0 {
 		status = http.StatusOK
@@ -198,6 +221,7 @@ func (h *NotificationHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		h.handleStoreError(w, r, err)
 		return
 	}
+	h.publish(r.Context(), n)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -213,6 +237,7 @@ func (h *NotificationHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		h.handleStoreError(w, r, err)
 		return
 	}
+	h.publish(r.Context(), n)
 	writeJSON(w, http.StatusOK, n)
 }
 

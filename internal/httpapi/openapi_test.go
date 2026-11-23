@@ -35,6 +35,7 @@ func TestOpenAPIMatchesRouter(t *testing.T) {
 		Notifications: &NotificationHandler{},
 		Metrics:       &MetricsHandler{},
 		Prometheus:    http.NotFoundHandler(),
+		WS:            &WSHandler{},
 	}
 	served := map[string]bool{}
 	for _, r := range routes(all) {

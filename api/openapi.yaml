@@ -260,6 +260,35 @@ paths:
         "400": { $ref: "#/components/responses/InvalidID" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/ws:
+    get:
+      tags: [Notifications]
+      summary: Live status updates (WebSocket)
+      description: |
+        Upgrades to a WebSocket that streams a `StatusEvent` JSON message
+        every time a notification changes status (created, processing,
+        sent, retry scheduled, failed, cancelled, retried), from any API or
+        worker replica.
+
+        Events are best-effort: they are not stored, so a disconnected
+        client misses them. Reload state from the REST endpoints after
+        reconnecting. Clients that cannot keep up are disconnected.
+
+        Example: `websocat ws://localhost:8080/v1/ws?batch_id=<id>`
+      operationId: statusStream
+      parameters:
+        - name: batch_id
+          in: query
+          description: Only stream events for this batch.
+          schema: { type: string, format: uuid }
+      responses:
+        "101":
+          description: Switching to WebSocket. Each message is a `StatusEvent`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusEvent" }
+        "400": { $ref: "#/components/responses/InvalidID" }
+
   /v1/metrics:
     get:
       tags: [Observability]
@@ -471,6 +500,20 @@ components:
         sent_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    StatusEvent:
+      type: object
+      required: [id, channel, priority, recipient, status, attempts, at]
+      properties:
+        id: { type: string, format: uuid }
+        batch_id: { type: string, format: uuid }
+        channel: { $ref: "#/components/schemas/Channel" }
+        priority: { $ref: "#/components/schemas/Priority" }
+        recipient: { type: string }
+        status: { $ref: "#/components/schemas/Status" }
+        attempts: { type: integer }
+        last_error: { type: string }
+        at: { type: string, format: date-time, description: When the change happened. }
 
     BatchCreated:
       type: object
