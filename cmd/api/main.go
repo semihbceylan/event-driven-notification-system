@@ -65,6 +65,7 @@ func run(logger *slog.Logger) error {
 		Repo:        store,
 		MaxAttempts: cfg.MaxAttempts,
 		Events:      events.NewPublisher(rdb, logger),
+		Templates:   store,
 	}
 
 	// Forward status events from Redis to this replica's WebSocket clients.
@@ -98,6 +99,7 @@ func run(logger *slog.Logger) error {
 			Prometheus:    promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
 			HTTPMetrics:   metrics.NewHTTP(reg),
 			WS:            &httpapi.WSHandler{Hub: hub, AllowedOrigins: cfg.AllowedOrigins},
+			Templates:     &httpapi.TemplateHandler{Repo: store},
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,

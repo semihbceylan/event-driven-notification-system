@@ -23,6 +23,7 @@ servers:
 tags:
   - name: Notifications
   - name: Batches
+  - name: Templates
   - name: Observability
 
 paths:
@@ -47,6 +48,9 @@ paths:
               scheduledEmail:
                 summary: Email scheduled for later
                 value: { recipient: "user@example.com", channel: email, content: "Your weekly summary", scheduled_at: "2026-12-01T09:00:00Z" }
+              fromTemplate:
+                summary: SMS rendered from a template
+                value: { recipient: "+905551234567", channel: sms, template: order_shipped, variables: { name: Ayse, order_id: "1234" } }
       responses:
         "201":
           description: Created and queued.
@@ -260,6 +264,79 @@ paths:
         "400": { $ref: "#/components/responses/InvalidID" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/templates:
+    get:
+      tags: [Templates]
+      summary: List templates
+      operationId: listTemplates
+      responses:
+        "200":
+          description: All templates, by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Template" }
+
+  /v1/templates/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: "1-64 characters: lowercase letters, digits, `-` and `_`."
+        schema: { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" }
+    put:
+      tags: [Templates]
+      summary: Create or replace a template
+      description: |
+        Content may contain `{{variable}}` placeholders (letters, digits and
+        underscores; spaces inside the braces are allowed). Notifications
+        store the rendered text, so replacing or deleting a template never
+        changes notifications already created from it.
+      operationId: putTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TemplateInput" }
+            example: { channel: sms, content: "Hi {{name}}, your order {{order_id}} has shipped!" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Template" }
+        "200":
+          description: Replaced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Template" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    get:
+      tags: [Templates]
+      summary: Get a template
+      operationId: getTemplate
+      responses:
+        "200":
+          description: The template.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Template" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Templates]
+      summary: Delete a template
+      operationId: deleteTemplate
+      responses:
+        "204":
+          description: Deleted.
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/ws:
     get:
       tags: [Notifications]
@@ -450,7 +527,8 @@ components:
 
     CreateNotification:
       type: object
-      required: [recipient, channel, content]
+      description: Provide either `content`, or `template` (plus `variables`).
+      required: [recipient, channel]
       additionalProperties: false
       properties:
         recipient:
@@ -470,6 +548,16 @@ components:
           type: string
           format: date-time
           description: Send at this time instead of now. Must be in the future and within one year.
+        template:
+          type: string
+          description: |
+            Name of a template to render instead of `content`. Its channel must
+            match. The rendered text is checked against the channel's limits.
+        variables:
+          type: object
+          additionalProperties: { type: string }
+          description: Values for the template's placeholders. All are required; extra ones are ignored.
+          example: { name: Ayse, order_id: "1234" }
 
     BatchItem:
       allOf:
@@ -494,10 +582,34 @@ components:
         attempts: { type: integer, description: Delivery attempts made so far. }
         max_attempts: { type: integer }
         next_attempt_at: { type: string, format: date-time, description: When it is next eligible to be sent (scheduled time or retry backoff). }
+        template: { type: string, description: The template it was rendered from, if any. }
         provider_message_id: { type: string, description: The provider's `messageId` once sent. }
         last_error: { type: string, description: Error from the most recent failed attempt. }
         scheduled_at: { type: string, format: date-time }
         sent_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TemplateInput:
+      type: object
+      required: [channel, content]
+      additionalProperties: false
+      properties:
+        channel: { $ref: "#/components/schemas/Channel" }
+        content: { type: string, description: "Text with {{variable}} placeholders; at most the channel's content limit." }
+
+    Template:
+      type: object
+      required: [name, channel, content, variables, created_at, updated_at]
+      properties:
+        name: { type: string }
+        channel: { $ref: "#/components/schemas/Channel" }
+        content: { type: string }
+        variables:
+          type: array
+          items: { type: string }
+          description: Placeholders used in the content, in order of first use.
+          example: [name, order_id]
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 

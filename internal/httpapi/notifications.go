@@ -49,6 +49,7 @@ type NotificationHandler struct {
 	MaxAttempts int
 	Now         func() time.Time
 	Events      EventPublisher
+	Templates   TemplateRepository // optional; enables "template" in create requests
 }
 
 func (h *NotificationHandler) publish(ctx context.Context, ns ...notification.Notification) {
@@ -85,7 +86,12 @@ func (h *NotificationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	in.IdempotencyKey = r.Header.Get(IdempotencyKeyHeader)
 	in.Normalize()
-	if errs := in.Validate("", h.now()); len(errs) > 0 {
+	errs, err := resolveTemplates(r.Context(), h.Templates, []*notification.CreateInput{&in}, func(int) string { return "" })
+	if err != nil {
+		h.handleStoreError(w, r, err)
+		return
+	}
+	if errs = append(errs, in.Validate("", h.now())...); len(errs) > 0 {
 		writeValidationError(w, errs)
 		return
 	}
@@ -127,10 +133,21 @@ func (h *NotificationHandler) CreateBatch(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	inputs := make([]*notification.CreateInput, len(req.Notifications))
 	for i := range req.Notifications {
 		req.Notifications[i].Normalize()
+		inputs[i] = &req.Notifications[i]
 	}
-	if errs := notification.ValidateBatch(req.Notifications, h.now()); len(errs) > 0 {
+	var errs []notification.FieldError
+	if len(inputs) <= notification.MaxBatchSize { // too-large batches are rejected below without lookups
+		var err error
+		errs, err = resolveTemplates(r.Context(), h.Templates, inputs, func(i int) string { return fmt.Sprintf("notifications[%d].", i) })
+		if err != nil {
+			h.handleStoreError(w, r, err)
+			return
+		}
+	}
+	if errs = append(errs, notification.ValidateBatch(req.Notifications, h.now())...); len(errs) > 0 {
 		writeValidationError(w, errs)
 		return
 	}
