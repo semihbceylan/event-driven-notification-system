@@ -1,4 +1,4 @@
-.PHONY: up down logs build test test-web smoke lint fmt
+.PHONY: up down logs build test test-web smoke webhook-url lint fmt
 
 up:            ## Start the whole stack
 	docker compose up --build
@@ -20,6 +20,9 @@ test-web:      ## Dashboard unit tests
 
 smoke:         ## End-to-end checks against a running stack (make up first)
 	./scripts/smoke.sh
+
+webhook-url:   ## Fresh webhook.site URL into .env (free URLs: 50 requests); SELECT=1 also switches to it
+	SELECT=$(SELECT) ./scripts/webhook-url.sh
 
 lint:          ## Needs golangci-lint v2 installed; CI runs it on every push
 	golangci-lint run

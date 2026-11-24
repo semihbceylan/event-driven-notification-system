@@ -121,6 +121,8 @@ button.link:hover { text-decoration: underline; }
   display: grid; gap: 10px;
 }
 .provider strong { margin-right: 8px; }
+.provider-row { display: flex; align-items: center; gap: 8px; }
+.provider-row select { flex: 1; }
 .provider p { margin: 6px 0 0; }
 code { font-size: 12px; }
 
@@ -147,7 +149,10 @@ tbody tr:hover { background: var(--bg); }
 .status-pill.processing { background: var(--info-bg); color: var(--info); }
 .status-pill.sent { background: var(--ok-bg); color: var(--ok); }
 .status-pill.failed { background: var(--bad-bg); color: var(--bad); }
-.status-pill.cancelled { background: var(--warn-bg); color: var(--warn); }
+.status-pill.cancelled { background: var(--neutral-bg); color: var(--muted); text-decoration: line-through; }
+.status-pill.retrying { background: var(--warn-bg); color: var(--warn); }
+/* The error of an attempt that will be retried: informative, not alarming. */
+.error-cell.soft { color: var(--warn); }
 
 .prio { font-size: 12px; }
 .prio.high { color: var(--bad); font-weight: 600; }

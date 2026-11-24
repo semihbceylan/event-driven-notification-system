@@ -238,6 +238,23 @@ func TestBreakerStopsClaimsDuringOutage(t *testing.T) {
 	}
 }
 
+func TestResetBreakers(t *testing.T) {
+	q := &countingQueue{}
+	s := &fakeSender{err: &provider.Error{StatusCode: 503, Retryable: true}}
+	w := New(Config{
+		Channels: []notification.Channel{notification.ChannelSMS},
+		Breaker:  breaker.Config{Threshold: 1, Cooldown: time.Hour, MaxCooldown: time.Hour},
+	}, q, s, fakeLimiter{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, _ = w.ProcessOne(context.Background(), notification.ChannelSMS)
+	if w.BreakerStates()["sms"] != "open" {
+		t.Fatal("breaker should be open")
+	}
+	w.ResetBreakers()
+	if w.BreakerStates()["sms"] != "closed" {
+		t.Error("breaker should be closed after reset")
+	}
+}
+
 func TestPermanentErrorsDoNotOpenBreaker(t *testing.T) {
 	q := &countingQueue{}
 	s := &fakeSender{err: &provider.Error{StatusCode: 400, Retryable: false}}

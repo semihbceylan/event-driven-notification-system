@@ -60,6 +60,17 @@ export interface CreateInput {
   scheduled_at?: string;
 }
 
+export interface ProviderInfo {
+  name: string;
+  host: string;
+  mock: boolean;
+}
+
+export interface ProviderState {
+  active: string;
+  providers: ProviderInfo[];
+}
+
 export interface FieldError {
   field: string;
   message: string;
@@ -105,6 +116,9 @@ export const api = {
   metrics: () =>
     request<{ window: string; channels: Record<Channel, ChannelStats> }>("/v1/metrics?window=5m"),
   breakers: () => request<Record<Channel, string>>("/worker/breakers"),
+  provider: () => request<ProviderState>("/v1/provider"),
+  setProvider: (name: string) =>
+    request<ProviderState>("/v1/provider", { method: "PUT", body: JSON.stringify({ name }) }),
   mockConfig: () => request<{ config: { failure_rate: number; failure_status: number } }>("/mock/admin/config"),
   setMockConfig: (cfg: { failure_rate: number; failure_status?: number }) =>
     request("/mock/admin/config", { method: "PUT", body: JSON.stringify(cfg) }),

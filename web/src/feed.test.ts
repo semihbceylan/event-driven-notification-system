@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEvent, MAX_ROWS, type Row } from "./feed";
+import { applyEvent, displayStatus, MAX_ROWS, type Row } from "./feed";
 import type { StatusEvent } from "./api";
 
 const ev = (over: Partial<StatusEvent>): StatusEvent => ({
@@ -48,5 +48,16 @@ describe("applyEvent", () => {
     for (let i = 0; i < MAX_ROWS + 10; i++) rows = applyEvent(rows, ev({ id: String(i) }));
     expect(rows).toHaveLength(MAX_ROWS);
     expect(rows[0].id).toBe(String(MAX_ROWS + 9));
+  });
+});
+
+describe("displayStatus", () => {
+  it("shows a pending notification with a failed attempt as retrying", () => {
+    expect(displayStatus({ status: "pending", attempts: 1, last_error: "429" })).toBe("retrying");
+  });
+  it("keeps other statuses", () => {
+    expect(displayStatus({ status: "pending", attempts: 0 })).toBe("pending");
+    expect(displayStatus({ status: "failed", attempts: 5, last_error: "400" })).toBe("failed");
+    expect(displayStatus({ status: "sent", attempts: 2 })).toBe("sent");
   });
 });

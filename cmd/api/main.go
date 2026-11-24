@@ -24,6 +24,7 @@ import (
 	"github.com/semihbceylan/event-driven-notification-system/internal/logging"
 	"github.com/semihbceylan/event-driven-notification-system/internal/metrics"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
+	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
 	"github.com/semihbceylan/event-driven-notification-system/internal/tracing"
 )
 
@@ -115,6 +116,10 @@ func run(logger *slog.Logger) error {
 			HTTPMetrics:   metrics.NewHTTP(reg),
 			WS:            &httpapi.WSHandler{Hub: hub, AllowedOrigins: cfg.AllowedOrigins},
 			Templates:     &httpapi.TemplateHandler{Repo: store},
+			Provider: &httpapi.ProviderHandler{
+				Targets: cfg.Providers, Default: cfg.DefaultProvider,
+				Selection: provider.RedisSelection{RDB: rdb},
+			},
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,

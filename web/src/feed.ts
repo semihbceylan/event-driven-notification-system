@@ -19,6 +19,16 @@ export interface Row {
 
 export const MAX_ROWS = 300;
 
+/**
+ * The status to show. A pending notification that already has a failed
+ * attempt is waiting to be retried; showing it as plain "pending" with a
+ * red error next to it reads as a failure, which it is not.
+ */
+export function displayStatus(r: Pick<Row, "status" | "attempts" | "last_error">): string {
+  if (r.status === "pending" && r.attempts > 0 && r.last_error) return "retrying";
+  return r.status;
+}
+
 export function rowFromNotification(n: Notification): Row {
   return {
     id: n.id,
