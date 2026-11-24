@@ -77,6 +77,13 @@ A Vue 3 + TypeScript app (`web/`), served by nginx at http://localhost:3000:
 
 - **Metrics per channel** (polled every 2s): queue (due, waiting, sending), sent, failed, delivery and
   attempt success rates, p95 provider and delivery latency, and circuit breaker state.
+- **Live charts** for the last 3 minutes: sends per second per channel, with the rate limit drawn in, and the
+  queue backlog, with periods where a circuit breaker was open shaded. A burst shows up as a flat line at
+  the limit; an outage as a backlog that holds and then drains. They are cheap by design: sends per
+  second are counted from the WebSocket events the feed already receives (O(1) per event, outside Vue's
+  reactivity, redrawn once a second), the backlog reuses the same 2-second metrics poll as the cards, so
+  the charts add no requests to the API, and all polling pauses while the tab is hidden. Plain SVG, no
+  chart library.
 - **Live feed** over WebSocket (`GET /v1/ws`): rows change from pending → processing → sent as the
   worker delivers them, with cancel and retry buttons.
 - **Send form** with optional scheduling, and **Burst 100/1000** buttons that send a batch on the selected

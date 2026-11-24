@@ -14,12 +14,16 @@ type StatsSource interface {
 
 type MetricsHandler struct {
 	Stats StatsSource
+	// RateLimitPerSecond is the configured per-channel send limit, reported
+	// so the dashboard can draw it next to the measured send rate.
+	RateLimitPerSecond int
 }
 
 type metricsResponse struct {
 	Window      string                                              `json:"window"`
 	GeneratedAt time.Time                                           `json:"generated_at"`
 	Channels    map[notification.Channel]*notification.ChannelStats `json:"channels"`
+	RateLimit   int                                                 `json:"rate_limit_per_second"`
 }
 
 // Summary handles GET /v1/metrics?window=5m: queue depth, success and
@@ -41,5 +45,7 @@ func (h MetricsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		(&NotificationHandler{}).handleStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, metricsResponse{Window: window.String(), GeneratedAt: time.Now().UTC(), Channels: stats})
+	writeJSON(w, http.StatusOK, metricsResponse{
+		Window: window.String(), GeneratedAt: time.Now().UTC(), Channels: stats, RateLimit: h.RateLimitPerSecond,
+	})
 }

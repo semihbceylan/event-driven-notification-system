@@ -3,7 +3,10 @@ import { onMounted, onUnmounted, ref } from "vue";
 import { api } from "./api";
 import { applyEvent, rowFromNotification, type Row } from "./feed";
 import { useLiveStatus } from "./live";
+import { useMetrics } from "./metrics";
+import { RateCounter } from "./series";
 import MetricsPanel from "./components/MetricsPanel.vue";
+import LiveCharts from "./components/LiveCharts.vue";
 import SendPanel from "./components/SendPanel.vue";
 import FeedTable from "./components/FeedTable.vue";
 
@@ -31,8 +34,15 @@ async function load() {
   }
 }
 
+const metrics = useMetrics();
+
+// Sends per second for the chart. A plain object, not reactive: counting an
+// event is a couple of array writes, and the chart reads it once a second.
+const rates = new RateCounter();
+
 const live = useLiveStatus(
   (ev) => {
+    if (ev.status === "sent") rates.add(ev.channel, Date.now());
     if (loading) pending.push(ev);
     else rows.value = applyEvent(rows.value, ev);
   },
@@ -56,7 +66,9 @@ onUnmounted(live.stop);
       </nav>
     </header>
 
-    <MetricsPanel />
+    <MetricsPanel :stats="metrics.stats.value" :breakers="metrics.breakers.value" :error="metrics.error.value" />
+
+    <LiveCharts :rates="rates" :samples="metrics.samples.value" :rate-limit="metrics.rateLimit.value" />
 
     <p v-if="loadError" class="banner error">Could not load notifications: {{ loadError }}</p>
 

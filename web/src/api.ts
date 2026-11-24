@@ -114,7 +114,9 @@ export const api = {
   cancel: (id: string) => request<Notification>(`/v1/notifications/${id}/cancel`, { method: "POST" }),
   retry: (id: string) => request<Notification>(`/v1/notifications/${id}/retry`, { method: "POST" }),
   metrics: () =>
-    request<{ window: string; channels: Record<Channel, ChannelStats> }>("/v1/metrics?window=5m"),
+    request<{ window: string; channels: Record<Channel, ChannelStats>; rate_limit_per_second?: number }>(
+      "/v1/metrics?window=5m",
+    ),
   breakers: () => request<Record<Channel, string>>("/worker/breakers"),
   provider: () => request<ProviderState>("/v1/provider"),
   setProvider: (name: string) =>

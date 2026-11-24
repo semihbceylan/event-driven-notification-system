@@ -429,9 +429,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [window, generated_at, channels]
+                required: [window, generated_at, channels, rate_limit_per_second]
                 properties:
                   window: { type: string, example: 5m0s }
+                  rate_limit_per_second:
+                    type: integer
+                    description: Configured send limit per channel (RATE_LIMIT_PER_SECOND).
+                    example: 100
                   generated_at: { type: string, format: date-time }
                   channels:
                     type: object
