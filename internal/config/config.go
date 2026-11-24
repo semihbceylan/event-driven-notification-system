@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
 )
 
 type Config struct {
@@ -15,7 +17,10 @@ type Config struct {
 	RedisAddr   string
 	LogLevel    string
 
-	ProviderURL     string
+	// Providers are the delivery providers the operator allows, as
+	// "name=url,name=url". The API can switch between them by name only.
+	Providers       []provider.Target
+	DefaultProvider string
 	ProviderTimeout time.Duration
 
 	// RateLimitPerSecond is the maximum number of messages sent per second
@@ -51,11 +56,11 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL: getEnv("DATABASE_URL", "postgres://notify:notify@localhost:5432/notify?sslmode=disable"),
-		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
-		LogLevel:    getEnv("LOG_LEVEL", "info"),
-		ProviderURL: getEnv("PROVIDER_URL", "http://localhost:8090/send"),
+		HTTPAddr:        getEnv("HTTP_ADDR", ":8080"),
+		DatabaseURL:     getEnv("DATABASE_URL", "postgres://notify:notify@localhost:5432/notify?sslmode=disable"),
+		RedisAddr:       getEnv("REDIS_ADDR", "localhost:6379"),
+		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		DefaultProvider: getEnv("DEFAULT_PROVIDER", "mock"),
 
 		WorkerHTTPAddr: getEnv("WORKER_HTTP_ADDR", ":9091"),
 	}
@@ -66,6 +71,12 @@ func Load() (Config, error) {
 	}
 
 	var err error
+	if cfg.Providers, err = provider.ParseTargets(getEnv("PROVIDERS", "mock=http://localhost:8090/send")); err != nil {
+		return Config{}, fmt.Errorf("config: PROVIDERS: %w", err)
+	}
+	if !hasTarget(cfg.Providers, cfg.DefaultProvider) {
+		return Config{}, fmt.Errorf("config: DEFAULT_PROVIDER %q is not in PROVIDERS", cfg.DefaultProvider)
+	}
 	if cfg.ProviderTimeout, err = getDuration("PROVIDER_TIMEOUT", 5*time.Second); err != nil {
 		return Config{}, err
 	}
@@ -103,6 +114,15 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: LOCK_TIMEOUT (%s) must be longer than PROVIDER_TIMEOUT (%s)", cfg.LockTimeout, cfg.ProviderTimeout)
 	}
 	return cfg, nil
+}
+
+func hasTarget(ts []provider.Target, name string) bool {
+	for _, t := range ts {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func getEnv(key, fallback string) string {

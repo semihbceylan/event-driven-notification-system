@@ -25,8 +25,9 @@ services:
       timeout: 3s
       retries: 20
 
-  # Stands in for webhook.site so everything runs offline.
-  # Set PROVIDER_URL to your webhook.site URL to use the real one.
+  # Stands in for webhook.site so everything runs offline. Set
+  # WEBHOOK_SITE_URL to also offer your webhook.site URL; switch between
+  # them in the dashboard or with PUT /v1/provider.
   mockprovider:
     build: .
     command: ["mockprovider"]
@@ -47,7 +48,9 @@ services:
     environment: &app-env
       DATABASE_URL: postgres://notify:notify@postgres:5432/notify?sslmode=disable
       REDIS_ADDR: redis:6379
-      PROVIDER_URL: ${PROVIDER_URL:-http://mockprovider:8090/send}
+      # Providers that can be selected (name=url); empty URLs are skipped.
+      PROVIDERS: mock=http://mockprovider:8090/send,webhook.site=${WEBHOOK_SITE_URL:-}
+      DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-mock}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-100}
       MAX_ATTEMPTS: ${MAX_ATTEMPTS:-5}

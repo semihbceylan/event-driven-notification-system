@@ -337,6 +337,47 @@ paths:
           description: Deleted.
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/provider:
+    get:
+      tags: [Observability]
+      summary: Active delivery provider
+      description: The provider deliveries currently go to, and the ones that can be selected.
+      operationId: getProvider
+      responses:
+        "200":
+          description: Provider state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderState" }
+    put:
+      tags: [Observability]
+      summary: Switch the delivery provider
+      description: |
+        Selects one of the providers configured on the server (`PROVIDERS`).
+        Only names are accepted, never URLs: accepting a URL would let a
+        caller redirect every notification to a server of their choosing.
+        Workers pick up the change within about a second and reset their
+        circuit breakers. (In production this would require admin auth.)
+      operationId: setProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name: { type: string, example: webhook.site }
+      responses:
+        "200":
+          description: Switched.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
   /v1/ws:
     get:
       tags: [Notifications]
@@ -589,6 +630,21 @@ components:
         sent_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    ProviderState:
+      type: object
+      required: [active, providers]
+      properties:
+        active: { type: string, example: mock }
+        providers:
+          type: array
+          items:
+            type: object
+            required: [name, host, mock]
+            properties:
+              name: { type: string, example: webhook.site }
+              host: { type: string, example: webhook.site, description: Host only; the full URL is never returned. }
+              mock: { type: boolean, description: True for the built-in mock provider. }
 
     TemplateInput:
       type: object

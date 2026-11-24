@@ -147,6 +147,22 @@ func TestConcurrentAllowGivesOneProbe(t *testing.T) {
 	}
 }
 
+func TestResetCloses(t *testing.T) {
+	b, _ := newTestBreaker()
+	for range 3 {
+		b.Failure(0)
+	}
+	b.Reset()
+	if b.State() != Closed || !b.Allow() {
+		t.Fatal("Reset must close the breaker")
+	}
+	b.Failure(0)
+	b.Failure(0)
+	if b.State() != Closed {
+		t.Fatal("Reset must clear the failure count")
+	}
+}
+
 func TestStateChangeCallback(t *testing.T) {
 	b, c := newTestBreaker()
 	var changes []string

@@ -79,6 +79,13 @@ func run(logger *slog.Logger) error {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
+	// Deliveries go through whichever configured provider is selected
+	// (dashboard or PUT /v1/provider); checked every second.
+	providers, err := provider.NewSwitch(cfg.Providers, cfg.DefaultProvider, cfg.ProviderTimeout, provider.RedisSelection{RDB: rdb}, logger)
+	if err != nil {
+		return err
+	}
+
 	w := worker.New(
 		worker.Config{
 			Channels:          notification.Channels,
@@ -95,13 +102,15 @@ func run(logger *slog.Logger) error {
 			},
 		},
 		notification.NewStore(pool),
-		provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout),
+		providers,
 		ratelimit.New(rdb, cfg.RateLimitPerSecond, time.Second),
 		metrics.NewWorker(reg),
 		logger,
 	)
 
 	w.SetEventPublisher(events.NewPublisher(rdb, logger))
+	providers.OnChange(func(_, _ string) { w.ResetBreakers() })
+	go providers.Run(ctx, time.Second)
 
 	// Health and metrics. An open circuit breaker does not make the worker
 	// unhealthy: it is doing its job by waiting, and restarting it would not
@@ -116,6 +125,9 @@ func run(logger *slog.Logger) error {
 	mux.HandleFunc("GET /breakers", func(rw http.ResponseWriter, _ *http.Request) {
 		httpapi.WriteJSON(rw, http.StatusOK, w.BreakerStates())
 	})
+	mux.HandleFunc("GET /provider", func(rw http.ResponseWriter, _ *http.Request) {
+		httpapi.WriteJSON(rw, http.StatusOK, map[string]string{"active": providers.ActiveName()})
+	})
 	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	srv := &http.Server{Addr: cfg.WorkerHTTPAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -127,7 +139,7 @@ func run(logger *slog.Logger) error {
 	logger.Info("worker started",
 		"workers_per_channel", cfg.WorkersPerChannel,
 		"rate_limit_per_second", cfg.RateLimitPerSecond,
-		"provider_url", cfg.ProviderURL,
+		"provider", providers.ActiveName(),
 		"http_addr", cfg.WorkerHTTPAddr,
 	)
 	w.Run(ctx) // returns after SIGTERM once in-flight sends finish

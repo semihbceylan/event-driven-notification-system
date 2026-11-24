@@ -301,6 +301,14 @@ func (w *Worker) ProcessOne(ctx context.Context, ch notification.Channel) (worke
 	return true, w.checkRecord(log, err)
 }
 
+// ResetBreakers closes every channel's breaker. Called when the provider is
+// switched: the old provider's failures say nothing about the new one.
+func (w *Worker) ResetBreakers() {
+	for _, b := range w.breakers {
+		b.Reset()
+	}
+}
+
 // BreakerStates reports each channel's breaker state, for the health check.
 func (w *Worker) BreakerStates() map[string]string {
 	out := make(map[string]string, len(w.breakers))

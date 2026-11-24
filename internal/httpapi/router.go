@@ -20,6 +20,7 @@ type Deps struct {
 	HTTPMetrics   *metrics.HTTP
 	WS            *WSHandler // GET /v1/ws
 	Templates     *TemplateHandler
+	Provider      *ProviderHandler
 }
 
 // NewRouter wires every route and the shared middleware.
@@ -78,6 +79,12 @@ func routes(d Deps) []route {
 			route{"GET /v1/templates/{name}", d.Templates.Get, true},
 			route{"PUT /v1/templates/{name}", d.Templates.Put, true},
 			route{"DELETE /v1/templates/{name}", d.Templates.Delete, true},
+		)
+	}
+	if d.Provider != nil {
+		rs = append(rs,
+			route{"GET /v1/provider", d.Provider.Get, true},
+			route{"PUT /v1/provider", d.Provider.Put, true},
 		)
 	}
 	if d.WS != nil {

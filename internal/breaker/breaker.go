@@ -140,6 +140,19 @@ func (b *Breaker) Release() {
 	b.probeInFlight = false
 }
 
+// Reset closes the breaker and forgets past failures, e.g. after switching
+// to a different provider whose health is unknown.
+func (b *Breaker) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.failures = 0
+	b.probeInFlight = false
+	b.cooldown = b.cfg.Cooldown
+	if b.state != Closed {
+		b.setState(Closed)
+	}
+}
+
 func (b *Breaker) State() State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
