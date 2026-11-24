@@ -123,8 +123,14 @@ func (w *Worker) emit(ctx context.Context, n notification.Notification, status n
 		return
 	}
 	n.Status = status
-	if lastErr != "" {
+	switch {
+	case lastErr != "":
 		n.LastError = &lastErr
+	case status == notification.StatusSent:
+		// n is the row as it was claimed, which still carries the previous
+		// attempt's error. MarkSent clears it in the database; the event
+		// must match, or live clients keep showing an old error.
+		n.LastError = nil
 	}
 	w.events.Publish(ctx, events.FromNotification(n, w.now()))
 }

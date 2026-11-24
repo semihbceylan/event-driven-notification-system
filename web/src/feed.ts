@@ -70,6 +70,9 @@ export function applyEvent(rows: Row[], ev: StatusEvent): Row[] {
     return rows; // stale
   }
   const copy = rows.slice();
-  copy[i] = { ...next, last_error: ev.last_error ?? (ev.status === "sent" ? undefined : rows[i].last_error) };
+  // A sent notification has no error, whatever an event says; otherwise
+  // keep showing the last error while it is retried.
+  const lastError = ev.status === "sent" ? undefined : (ev.last_error ?? rows[i].last_error);
+  copy[i] = { ...next, last_error: lastError };
   return copy;
 }

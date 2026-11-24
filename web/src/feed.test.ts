@@ -43,6 +43,12 @@ describe("applyEvent", () => {
     expect(rows[0].last_error).toBeUndefined();
   });
 
+  it("clears the error when sent even if the event still carries one", () => {
+    let rows = applyEvent([], ev({ status: "pending", attempts: 1, last_error: "503", at: "2026-11-23T12:00:01Z" }));
+    rows = applyEvent(rows, ev({ status: "sent", attempts: 2, last_error: "503", at: "2026-11-23T12:00:02Z" }));
+    expect(rows[0].last_error).toBeUndefined();
+  });
+
   it("caps the list", () => {
     let rows: Row[] = [];
     for (let i = 0; i < MAX_ROWS + 10; i++) rows = applyEvent(rows, ev({ id: String(i) }));
