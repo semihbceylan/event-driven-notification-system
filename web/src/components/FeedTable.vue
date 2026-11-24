@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { api, ApiError, CHANNELS, STATUSES, type Channel, type Status } from "../api";
-import type { Row } from "../feed";
+import { displayStatus, type Row } from "../feed";
 import type { LiveState } from "../live";
 
 const props = defineProps<{ rows: Row[]; live: LiveState }>();
@@ -68,9 +68,9 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString();
             <td>{{ r.channel }}</td>
             <td><span class="prio" :class="r.priority">{{ r.priority }}</span></td>
             <td class="mono">{{ r.recipient }}</td>
-            <td><span class="status-pill" :class="r.status">{{ r.status }}</span></td>
+            <td><span class="status-pill" :class="displayStatus(r)">{{ displayStatus(r) }}</span></td>
             <td class="num">{{ r.attempts }}</td>
-            <td class="error-cell" :title="r.last_error">{{ r.last_error ?? "" }}</td>
+            <td class="error-cell" :class="{ soft: r.status !== 'failed' }" :title="r.last_error">{{ r.last_error ?? "" }}</td>
             <td class="actions">
               <button v-if="r.status === 'pending'" class="link" @click="act('cancel', r.id)">Cancel</button>
               <button v-if="r.status === 'failed'" class="link" @click="act('retry', r.id)">Retry</button>
