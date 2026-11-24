@@ -46,6 +46,13 @@ docker compose up --build
 By default the worker sends to a **built-in mock provider**, so everything works offline. To add
 **webhook.site**, as in the assessment, as a second provider you can switch to:
 
+**One command:** `make webhook-url` creates a fresh URL that answers like the assessment's provider,
+saves it as `WEBHOOK_SITE_URL` in `.env`, restarts the API and worker, and prints the page to watch
+requests on. `make webhook-url SELECT=1` also switches delivery to it. Run it again whenever a URL runs
+out, which is free.
+
+Or by hand:
+
 1. Create a URL that answers `202` with the JSON body below, either on webhook.site ("Edit" → status 202,
    content type `application/json`) or with their API:
    ```bash
@@ -62,6 +69,7 @@ By default the worker sends to a **built-in mock provider**, so everything works
 > 7 days.** After that it answers `429 Request limit exceeded`. The system handles this correctly
 > (it retries, and the circuit breaker pauses the channel), but nothing gets through. Use webhook.site
 > to show the real integration with a few messages, and switch back to the mock for bursts and load tests.
+> When a URL runs out, `make webhook-url` gets a new one; creating URLs is free.
 
 ## Dashboard
 
