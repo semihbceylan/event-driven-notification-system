@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/semihbceylan/event-driven-notification-system/internal/breaker"
+	"github.com/semihbceylan/event-driven-notification-system/internal/events"
 	"github.com/semihbceylan/event-driven-notification-system/internal/notification"
 	"github.com/semihbceylan/event-driven-notification-system/internal/provider"
 	"github.com/semihbceylan/event-driven-notification-system/internal/tracing"
@@ -317,5 +318,35 @@ func TestDeliveryContinuesTheCreatingTrace(t *testing.T) {
 	}
 	if attrs["notification.outcome"] != "retry" || attrs["notification.id"] != n.ID.String() {
 		t.Errorf("attributes = %v", attrs)
+	}
+}
+
+type recordingPublisher struct{ evs []events.Event }
+
+func (p *recordingPublisher) Publish(_ context.Context, evs ...events.Event) {
+	p.evs = append(p.evs, evs...)
+}
+
+// Found with the dashboard: after a retry succeeded, the "sent" event still
+// carried the previous attempt's error, so the live feed showed a stale 503
+// next to a sent notification.
+func TestSentEventHasNoError(t *testing.T) {
+	n := pending(2)
+	prev := "provider returned 503"
+	n.LastError = &prev // as claimed: the error from attempt 1
+
+	pub := &recordingPublisher{}
+	w := newTestWorker(&fakeQueue{next: n}, &fakeSender{}, fakeLimiter{})
+	w.SetEventPublisher(pub)
+	if _, err := w.ProcessOne(context.Background(), notification.ChannelSMS); err != nil {
+		t.Fatal(err)
+	}
+
+	last := pub.evs[len(pub.evs)-1]
+	if last.Status != notification.StatusSent || last.LastError != nil {
+		t.Errorf("sent event = status %s, last_error %v; want sent with no error", last.Status, last.LastError)
+	}
+	if first := pub.evs[0]; first.Status != notification.StatusProcessing || first.LastError == nil {
+		t.Errorf("processing event should still show the previous error while retrying: %+v", first)
 	}
 }
