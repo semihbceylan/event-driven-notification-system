@@ -43,8 +43,8 @@ docker compose up --build
 | http://localhost:9091/breakers | Worker: circuit breaker state per channel |
 | http://localhost:8090/admin/config | Mock provider: inject failures |
 
-By default the worker sends to a **built-in mock provider**, so everything works offline. To use
-**webhook.site**, as in the assessment:
+By default the worker sends to a **built-in mock provider**, so everything works offline. To add
+**webhook.site**, as in the assessment, as a second provider you can switch to:
 
 1. Create a URL that answers `202` with the JSON body below, either on webhook.site ("Edit" → status 202,
    content type `application/json`) or with their API:
@@ -53,10 +53,15 @@ By default the worker sends to a **built-in mock provider**, so everything works
      -d '{"default_status":202,"default_content_type":"application/json","default_content":"{\"messageId\":\"6f1c2a3e-0000-4000-8000-000000000000\",\"status\":\"accepted\",\"timestamp\":\"2026-11-23T12:00:00Z\"}"}' \
      | jq -r '"https://webhook.site/" + .uuid'
    ```
-2. `cp .env.example .env` and set `PROVIDER_URL=https://webhook.site/<uuid>`.
-3. `docker compose up -d`. Requests show up at `https://webhook.site/#!/<uuid>`.
+2. `cp .env.example .env` and set `WEBHOOK_SITE_URL=https://webhook.site/<uuid>`.
+3. `docker compose up -d`, then pick **webhook.site** in the dashboard's *Delivery provider* selector
+   (or `curl -X PUT localhost:8080/v1/provider -d '{"name":"webhook.site"}'`). Requests show up at
+   `https://webhook.site/#!/<uuid>`.
 
-Free webhook.site URLs limit the number of requests and expire, so use the mock for load tests.
+> **A free webhook.site URL accepts only 50 requests in total, retries included, and expires after
+> 7 days.** After that it answers `429 Request limit exceeded`. The system handles this correctly
+> (it retries, and the circuit breaker pauses the channel), but nothing gets through. Use webhook.site
+> to show the real integration with a few messages, and switch back to the mock for bursts and load tests.
 
 ## Dashboard
 
@@ -66,9 +71,13 @@ A Vue 3 + TypeScript app (`web/`), served by nginx at http://localhost:3000:
   attempt success rates, p95 provider and delivery latency, and circuit breaker state.
 - **Live feed** over WebSocket (`GET /v1/ws`): rows change from pending → processing → sent as the
   worker delivers them, with cancel and retry buttons.
-- **Send form** with optional scheduling, and **Burst 100/1000** buttons that send a mixed batch to show
-  priorities and rate limiting.
-- **Simulate outage**: switches the mock provider to 503s. The breaker opens, messages wait instead of
+- **Send form** with optional scheduling, and **Burst 100/1000** buttons that send a batch on the selected
+  channel with mixed priorities, to show priority ordering and rate limiting.
+- **`retrying` status** for a pending notification whose last attempt failed, so a temporary error is not
+  mistaken for a failure.
+- **Delivery provider selector**: shows which provider is actually receiving messages and switches
+  between the configured ones (mock, webhook.site).
+- **Simulate outage** (when the mock is active): switches the mock provider to 503s. The breaker opens, messages wait instead of
   failing, and they drain once you bring it back.
 
 The worker and API publish every status change to Redis pub/sub, and each API replica forwards events to
@@ -319,6 +328,18 @@ so a typo like `reciptient` fails loudly. Errors list every invalid field at onc
   saved, and missing variables when a notification is created. The rendered text then goes through the
   channel's normal length checks.
 
+### Provider selection
+
+Deliveries go to one of the providers configured on the server (`PROVIDERS`, e.g. `mock` and
+`webhook.site`). The active one is stored in Redis, so every worker replica follows a switch within a
+second. Switching resets the circuit breakers, because the old provider's failures say nothing about
+the new one.
+
+**The API switches by name only and never accepts or returns a URL.** If anyone could set a URL, one
+request would redirect every notification (phone numbers, emails, message content) to a server of
+their choosing, and a webhook.site URL is itself a secret, since anyone who has it can read what is
+sent there. In production this endpoint would also be admin-only.
+
 ### Database design
 
 - **UUIDv7 primary keys:** they start with a timestamp, so inserts append to the end of the index
@@ -366,7 +387,9 @@ All settings are environment variables; docker compose passes the main ones thro
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PROVIDER_URL` | mock provider | Where notifications are POSTed |
+| `PROVIDERS` | `mock=…` (compose: mock + webhook.site) | Selectable providers, `name=url,name=url`; empty URLs are skipped |
+| `DEFAULT_PROVIDER` | `mock` | Provider used until one is selected |
+| `WEBHOOK_SITE_URL` | unset | Compose only: adds your webhook.site URL to `PROVIDERS` |
 | `PROVIDER_TIMEOUT` | `5s` | Per provider request |
 | `RATE_LIMIT_PER_SECOND` | `100` | Per channel, across all workers |
 | `WORKERS_PER_CHANNEL` | `10` | Concurrent senders per channel per worker process |
@@ -401,7 +424,7 @@ simulated provider outage pauses delivery without failing any message.
 | WebSocket | Real connection through the middleware: events are delivered, filtered by batch, and clients are cleaned up on disconnect; slow clients are dropped |
 | Dashboard | Merging live events: out-of-order events are ignored, errors are kept while retrying and cleared once sent |
 
-**Try the failure handling yourself** with the stack running (`PROVIDER_URL` unset, so the mock is used):
+**Try the failure handling yourself** with the stack running and the **mock** provider selected (the default):
 
 ```bash
 # 1. Take the provider down: every request gets 503
