@@ -372,7 +372,17 @@ sent there. In production this endpoint would also be admin-only.
 
 - **Structured JSON logs** (`log/slog`) with a **correlation ID**. It is taken from `X-Correlation-ID` or
   generated, returned in the response, stored on the notification, logged by the worker on every attempt,
-  and sent to the provider. One ID traces a message end to end.
+  and sent to the provider. One ID traces a message end to end:
+  ```bash
+  curl -s localhost:8080/v1/notifications -H 'Content-Type: application/json' -H 'X-Correlation-ID: demo-42' \
+    -d '{"recipient":"+905551234567","channel":"sms","content":"Hello"}' > /dev/null
+  docker compose logs api worker | grep demo-42
+  # api-1     {"level":"INFO","msg":"http request","correlation_id":"demo-42","route":"POST /v1/notifications","status":201,...}
+  # worker-1  {"level":"INFO","msg":"notification sent","correlation_id":"demo-42","attempt":1,"provider_message_id":"...",...}
+  ```
+  Requests log at info, client errors at warn and server errors at error. Successful polling (health
+  checks, Prometheus, the dashboard's metrics) logs at debug, so it does not bury real traffic;
+  `LOG_LEVEL=debug` shows it.
 - **`GET /v1/metrics`:** queue depth (due, waiting, processing), sent and failed counts, success rates,
   and provider and delivery latency percentiles per channel. It is computed in Postgres, so it is
   correct with any number of workers.

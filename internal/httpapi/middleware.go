@@ -88,7 +88,7 @@ func RequestContext(base *slog.Logger, m *metrics.HTTP) func(http.Handler) http.
 			if m != nil {
 				m.Observe(r.Method, req.Pattern, rec.status, elapsed)
 			}
-			logger.Info("http request",
+			logger.Log(req.Context(), requestLogLevel(req.Pattern, rec.status), "http request",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"route", req.Pattern,
@@ -96,6 +96,33 @@ func RequestContext(base *slog.Logger, m *metrics.HTTP) func(http.Handler) http.
 				"duration_ms", elapsed.Milliseconds(),
 			)
 		})
+	}
+}
+
+// pollingRoutes are called every few seconds by health checks, Prometheus
+// and the dashboard. Logged at info they made up almost 90% of the API's
+// log lines and buried the requests that matter, so a successful call to
+// one of them is logged at debug (LOG_LEVEL=debug shows them).
+var pollingRoutes = map[string]bool{
+	"GET /healthz":     true,
+	"GET /readyz":      true,
+	"GET /metrics":     true,
+	"GET /v1/metrics":  true,
+	"GET /v1/provider": true,
+}
+
+// requestLogLevel: server errors at error, client errors at warn, polling
+// at debug, everything else at info.
+func requestLogLevel(route string, status int) slog.Level {
+	switch {
+	case status >= 500:
+		return slog.LevelError
+	case status >= 400:
+		return slog.LevelWarn
+	case pollingRoutes[route]:
+		return slog.LevelDebug
+	default:
+		return slog.LevelInfo
 	}
 }
 
