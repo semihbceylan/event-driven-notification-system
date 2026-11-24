@@ -1,32 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
-import { api, CHANNELS, type Channel, type ChannelStats } from "../api";
+import { CHANNELS, type Channel, type ChannelStats } from "../api";
 
-// Polls /v1/metrics and the worker's breaker states every 2 seconds.
-const stats = ref<Record<Channel, ChannelStats> | null>(null);
-const breakers = ref<Record<string, string>>({});
-const error = ref("");
-let timer: number | undefined;
-
-async function refresh() {
-  try {
-    stats.value = (await api.metrics()).channels;
-    error.value = "";
-  } catch (e) {
-    error.value = (e as Error).message;
-  }
-  try {
-    breakers.value = await api.breakers();
-  } catch {
-    breakers.value = {}; // the worker may be restarting; not worth an error banner
-  }
-}
-
-onMounted(() => {
-  refresh();
-  timer = window.setInterval(refresh, 2000);
-});
-onUnmounted(() => window.clearInterval(timer));
+// Data comes from the shared poller in metrics.ts (see App.vue).
+defineProps<{
+  stats: Record<Channel, ChannelStats> | null;
+  breakers: Record<string, string>;
+  error: string;
+}>();
 
 const pct = (v: number | null) => (v === null ? "–" : `${(v * 100).toFixed(1)}%`);
 const ms = (v: number | null) => (v === null ? "–" : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);

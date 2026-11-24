@@ -111,7 +111,7 @@ func run(logger *slog.Logger) error {
 			Logger:        logger,
 			Health:        health,
 			Notifications: notifications,
-			Metrics:       &httpapi.MetricsHandler{Stats: store},
+			Metrics:       &httpapi.MetricsHandler{Stats: store, RateLimitPerSecond: cfg.RateLimitPerSecond},
 			Prometheus:    promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
 			HTTPMetrics:   metrics.NewHTTP(reg),
 			WS:            &httpapi.WSHandler{Hub: hub, AllowedOrigins: cfg.AllowedOrigins},
