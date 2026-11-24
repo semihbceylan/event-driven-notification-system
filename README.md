@@ -32,6 +32,9 @@ Requirements: Docker. Go 1.27+ is only needed to run the tests outside Docker.
 docker compose up --build
 ```
 
+The assessment's **webhook.site** provider is one command away: `make webhook-url SELECT=1` (details
+[below](#webhook-site)). Until then, messages go to a built-in mock so the stack works offline.
+
 | URL | What |
 |---|---|
 | http://localhost:3000 | **Dashboard**: send notifications, watch them live, simulate an outage |
@@ -43,6 +46,7 @@ docker compose up --build
 | http://localhost:9091/breakers | Worker: circuit breaker state per channel |
 | http://localhost:8090/admin/config | Mock provider: inject failures |
 
+<a id="webhook-site"></a>
 By default the worker sends to a **built-in mock provider**, so everything works offline. To add
 **webhook.site**, as in the assessment, as a second provider you can switch to:
 
@@ -430,7 +434,8 @@ All settings are environment variables; docker compose passes the main ones thro
 ## Testing
 
 ```bash
-make test   # go test -race ./... (integration tests start Postgres and Redis with testcontainers; needs Docker)
+make test   # go test -race ./... (integration tests start Postgres and Redis with testcontainers;
+            # they need Docker and are skipped locally if it is not running)
 cd web && npm test   # dashboard unit tests (vitest)
 make smoke           # end-to-end checks against the running stack (scripts/smoke.sh)
 ```

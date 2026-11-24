@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,11 @@ func newTestStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("integration test; needs Docker")
+	}
+	// Locally, skip when Docker is not running instead of failing. CI sets
+	// CI=true, so there a missing Docker still fails the build.
+	if os.Getenv("CI") == "" {
+		testcontainers.SkipIfProviderIsNotHealthy(t)
 	}
 	ctx := context.Background()
 
