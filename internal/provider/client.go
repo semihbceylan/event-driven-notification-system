@@ -11,7 +11,9 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -46,7 +48,11 @@ func (e *Error) Error() string {
 	if e.StatusCode == 0 {
 		return e.Message
 	}
-	return fmt.Sprintf("provider returned %d: %s", e.StatusCode, e.Message)
+	text := fmt.Sprintf("provider returned %d %s", e.StatusCode, http.StatusText(e.StatusCode))
+	if e.Message == "" {
+		return text
+	}
+	return text + ": " + e.Message
 }
 
 type Client struct {
@@ -103,8 +109,35 @@ func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 		StatusCode: resp.StatusCode,
 		Retryable:  isRetryable(resp.StatusCode),
 		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
-		Message:    truncate(string(respBody), 500),
+		Message:    readableMessage(respBody),
 	}
+}
+
+// readableMessage turns an error response body into text a person can read
+// at a glance. Providers usually answer with JSON such as
+// {"error":"simulated provider failure"} or
+// {"success":false,"error":{"message":"Request limit exceeded"}}; showing
+// that raw puts the useful part at the end, where the dashboard cuts it
+// off. Anything that is not such JSON is kept as it is.
+func readableMessage(body []byte) string {
+	var v map[string]any
+	if json.Unmarshal(body, &v) == nil {
+		for _, key := range []string{"error", "message", "detail", "error_description"} {
+			switch x := v[key].(type) {
+			case string:
+				if x != "" {
+					return truncate(x, 500)
+				}
+			case map[string]any:
+				for _, inner := range []string{"message", "detail", "code"} {
+					if m, ok := x[inner].(string); ok && m != "" {
+						return truncate(m, 500)
+					}
+				}
+			}
+		}
+	}
+	return truncate(strings.TrimSpace(string(body)), 500)
 }
 
 // isRetryable classifies HTTP status codes:
@@ -132,9 +165,13 @@ func parseRetryAfter(v string) time.Duration {
 	return 0
 }
 
+// truncate cuts s to at most n bytes without splitting a UTF-8 character.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "..."
 }

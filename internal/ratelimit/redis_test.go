@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,11 @@ func newRedis(t *testing.T) *redis.Client {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("integration test; needs Docker")
+	}
+	// Locally, skip when Docker is not running instead of failing. CI sets
+	// CI=true, so there a missing Docker still fails the build.
+	if os.Getenv("CI") == "" {
+		testcontainers.SkipIfProviderIsNotHealthy(t)
 	}
 	ctx := context.Background()
 	ctr, err := tcredis.Run(ctx, "redis:7-alpine")

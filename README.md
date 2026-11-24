@@ -32,6 +32,9 @@ Requirements: Docker. Go 1.27+ is only needed to run the tests outside Docker.
 docker compose up --build
 ```
 
+The assessment's **webhook.site** provider is one command away: `make webhook-url SELECT=1` (details
+[below](#webhook-site)). Until then, messages go to a built-in mock so the stack works offline.
+
 | URL | What |
 |---|---|
 | http://localhost:3000 | **Dashboard**: send notifications, watch them live, simulate an outage |
@@ -43,6 +46,7 @@ docker compose up --build
 | http://localhost:9091/breakers | Worker: circuit breaker state per channel |
 | http://localhost:8090/admin/config | Mock provider: inject failures |
 
+<a id="webhook-site"></a>
 By default the worker sends to a **built-in mock provider**, so everything works offline. To add
 **webhook.site**, as in the assessment, as a second provider you can switch to:
 
@@ -372,7 +376,17 @@ sent there. In production this endpoint would also be admin-only.
 
 - **Structured JSON logs** (`log/slog`) with a **correlation ID**. It is taken from `X-Correlation-ID` or
   generated, returned in the response, stored on the notification, logged by the worker on every attempt,
-  and sent to the provider. One ID traces a message end to end.
+  and sent to the provider. One ID traces a message end to end:
+  ```bash
+  curl -s localhost:8080/v1/notifications -H 'Content-Type: application/json' -H 'X-Correlation-ID: demo-42' \
+    -d '{"recipient":"+905551234567","channel":"sms","content":"Hello"}' > /dev/null
+  docker compose logs api worker | grep demo-42
+  # api-1     {"level":"INFO","msg":"http request","correlation_id":"demo-42","route":"POST /v1/notifications","status":201,...}
+  # worker-1  {"level":"INFO","msg":"notification sent","correlation_id":"demo-42","attempt":1,"provider_message_id":"...",...}
+  ```
+  Requests log at info, client errors at warn and server errors at error. Successful polling (health
+  checks, Prometheus, the dashboard's metrics) logs at debug, so it does not bury real traffic;
+  `LOG_LEVEL=debug` shows it.
 - **`GET /v1/metrics`:** queue depth (due, waiting, processing), sent and failed counts, success rates,
   and provider and delivery latency percentiles per channel. It is computed in Postgres, so it is
   correct with any number of workers.
@@ -420,7 +434,8 @@ All settings are environment variables; docker compose passes the main ones thro
 ## Testing
 
 ```bash
-make test   # go test -race ./... (integration tests start Postgres and Redis with testcontainers; needs Docker)
+make test   # go test -race ./... (integration tests start Postgres and Redis with testcontainers;
+            # they need Docker and are skipped locally if it is not running)
 cd web && npm test   # dashboard unit tests (vitest)
 make smoke           # end-to-end checks against the running stack (scripts/smoke.sh)
 ```

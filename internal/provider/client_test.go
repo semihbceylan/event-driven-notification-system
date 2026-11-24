@@ -112,3 +112,37 @@ func TestSendConnectionRefusedIsRetryable(t *testing.T) {
 		t.Errorf("connection refused should be retryable, got %+v", pe)
 	}
 }
+
+func TestErrorMessageIsReadable(t *testing.T) {
+	cases := []struct {
+		body string
+		want string
+	}{
+		{`{"error":"simulated provider failure"}`, "simulated provider failure"},
+		{`{"success":false,"error":{"message":"Request limit exceeded","id":"x"}}`, "Request limit exceeded"},
+		{`{"message":"quota used up"}`, "quota used up"},
+		{"  upstream timed out\n", "upstream timed out"},
+		{`{"unexpected":"shape"}`, `{"unexpected":"shape"}`},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := readableMessage([]byte(c.body)); got != c.want {
+			t.Errorf("readableMessage(%q) = %q, want %q", c.body, got, c.want)
+		}
+	}
+
+	e := &Error{StatusCode: 503, Message: "simulated provider failure"}
+	if got, want := e.Error(), "provider returned 503 Service Unavailable: simulated provider failure"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+	if got, want := (&Error{StatusCode: 502}).Error(), "provider returned 502 Bad Gateway"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestTruncateKeepsUTF8Valid(t *testing.T) {
+	got := truncate("çşğüöı", 3) // 2-byte characters: byte 3 is mid-character
+	if got != "ç..." {
+		t.Errorf("truncate = %q", got)
+	}
+}

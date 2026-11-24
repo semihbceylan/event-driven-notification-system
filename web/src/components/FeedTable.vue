@@ -27,6 +27,14 @@ async function act(kind: "cancel" | "retry", id: string) {
 }
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString();
+
+// Errors wrap to two lines; clicking one shows it in full.
+const expanded = ref(new Set<string>());
+function toggle(id: string) {
+  const next = new Set(expanded.value);
+  if (!next.delete(id)) next.add(id);
+  expanded.value = next;
+}
 </script>
 
 <template>
@@ -70,7 +78,19 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString();
             <td class="mono">{{ r.recipient }}</td>
             <td><span class="status-pill" :class="displayStatus(r)">{{ displayStatus(r) }}</span></td>
             <td class="num">{{ r.attempts }}</td>
-            <td class="error-cell" :class="{ soft: r.status !== 'failed' }" :title="r.last_error">{{ r.last_error ?? "" }}</td>
+            <td class="error-cell" :class="{ soft: r.status !== 'failed' }">
+              <button
+                v-if="r.last_error"
+                type="button"
+                class="error-text"
+                :class="{ open: expanded.has(r.id) }"
+                :title="expanded.has(r.id) ? 'Click to collapse' : r.last_error"
+                :aria-expanded="expanded.has(r.id)"
+                @click="toggle(r.id)"
+              >
+                {{ r.last_error }}
+              </button>
+            </td>
             <td class="actions">
               <button v-if="r.status === 'pending'" class="link" @click="act('cancel', r.id)">Cancel</button>
               <button v-if="r.status === 'failed'" class="link" @click="act('retry', r.id)">Retry</button>
