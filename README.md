@@ -489,19 +489,39 @@ deploy/prometheus/   Prometheus scrape config
 
 ## How I used AI tools
 
-<!-- DRAFT: rewrite this section in your own words before submitting. -->
+I built this project with Claude Code; the Claude Chrome extension was the only other AI tool. I read
+the brief, then left the design and implementation to the assistant: the stack (Go, Postgres as the
+queue, Redis for rate limiting and events), the retry policy and the code itself. My part was to make
+it prove its work and to use the result myself. At every major step I asked it to test what it had
+built and to tell me how it could be improved, and I tested the API endpoints and the dashboard by hand.
 
-I built this with an AI coding assistant and reviewed its output before accepting it. Cases where
-review or measurement caught something:
+That loop caught real problems:
 
-- **Rate limiter.** An end-to-end run showed up to 109 sends in a rolling second against a limit of 100.
-  The assistant's first explanation ("a measurement artifact") was wrong, and so was its second. I had
-  it measure at the source: capturing Redis's grant log with `MONITOR` showed a real bug, timestamps
-  rounded to milliseconds. After fixing that, the same capture showed the limiter itself never exceeds 100.
-  The remaining excess comes from the delay between getting a slot and sending, which is now documented
-  instead of hidden.
-- **Retry design.** When I asked whether the project "does its job correctly", a review turned up that
-  a provider outage longer than ~30 seconds would fail every queued message. That led to the circuit
-  breaker, which was then verified with a simulated 60-second outage.
+- **Rate limiter.** Asked to test the 100 msg/s limit end to end, the assistant measured up to 109 sends
+  in a rolling second. Its first explanation ("a measurement artifact") was wrong. Measuring at the
+  source, by capturing Redis's grant log with `MONITOR`, showed a real bug: timestamps rounded to
+  milliseconds. After the fix the same capture showed the limiter never grants more than 100 per second.
+  The small excess that remains comes from the delay between getting a slot and sending. It is now
+  documented instead of hidden.
+- **Provider outages.** When I asked whether the project "does its job correctly", the review found
+  that an outage longer than about 30 seconds would use up every queued message's retries and fail it.
+  That led to the per-channel circuit breaker. A simulated 60-second outage went from 300 failed
+  messages to 0.
+- **Using it with webhook.site.** Pointing the system at webhook.site, I noticed the dashboard still said
+  "mock provider", and a burst of 100 messages hit webhook.site's free limit of 50 requests and returned
+  429s. I suggested a provider selector in the dashboard. That became `PROVIDERS` / `GET|PUT /v1/provider`
+  (it shows names only, because a webhook.site URL lets anyone read the messages) and
+  `make webhook-url` to get a fresh free URL.
+- **Dashboard behaviour.** I picked SMS and still saw emails failing in the live feed: the load-test
+  burst mixed channels. Bursts now use the selected channel, and messages waiting for a retry show as
+  "retrying" instead of looking failed.
+- **Checking the UI in a real browser.** I had the assistant use the Chrome extension to go through the
+  dashboard and the Jaeger traces itself. During an outage demo it found that messages delivered after a
+  retry still showed their old error in the live feed. That was fixed, with tests on both the worker and
+  the dashboard.
 - **Specs and tests.** A test that compares the router to `openapi.yaml` caught a YAML syntax error in the
   generated spec. Tests with a tight tolerance replaced loose ones that would have hidden the limiter bug.
+
+What I'd do differently: the infrastructure choices were the assistant's, made from the brief. I haven't
+compared them with alternatives yet, such as a dedicated message broker in place of the Postgres queue.
+That is the next thing I want to check.
